@@ -1,0 +1,15 @@
+[package]
+name = "cad-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1.37", features = ["full"] }
+tower-http = { version = "0.5", features = ["fs", "trace"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+futures-util = { version = "0.3", features = ["sink"] }
+serde_json.workspace = true
+cad-protocol = { path = "../cad-protocol" }

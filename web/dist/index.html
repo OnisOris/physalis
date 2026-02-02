@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>physalis</title>
+    <link rel="stylesheet" href="/style-b424fc512b757f21.css" integrity="sha384-k/KtFOL/Lq4gULM6xuhg8BASjXgN6NPCC1jRrWliKvqx/z/kuUmZ01q6ufq36uEm"/>
+    <link rel="icon" href="/icon-f810cc4c59f4b56a.svg" integrity="sha384-Lzu/mGKsWlieHYMKjaEmP/dF7k5aIZMNQFknqsCnuCp0UdfHo68l42A/6sDi7RjC"/>
+    
+<script type="module">
+import init, * as bindings from '/cad-web-e0b9e225f8b8eb05.js';
+const wasm = await init({ module_or_path: '/cad-web-e0b9e225f8b8eb05_bg.wasm' });
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));
+
+</script>
+  <link rel="modulepreload" href="/cad-web-e0b9e225f8b8eb05.js" crossorigin="anonymous" integrity="sha384-RZqDiNNMgH3QqW865UR2qI7Yxeq75MocXR37Aq5XopdckciUxPKQmoZFcEijSQ9R"><link rel="preload" href="/cad-web-e0b9e225f8b8eb05_bg.wasm" crossorigin="anonymous" integrity="sha384-fvzsOtShtxJTJBQyqUsQvC6231mqBsnd3WWrrsaQiTXROmjlYkGMN8Ls2Utkyrwf" as="fetch" type="application/wasm"></head>
+  <body>
+    <noscript>This app requires JavaScript and WebAssembly.</noscript>
+  </body>
+</html>

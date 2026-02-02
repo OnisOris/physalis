@@ -1,0 +1,12 @@
+[package]
+name = "cad-geom"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cad-core = { path = "../cad-core" }
+thiserror.workspace = true
+truck-modeling = "0.6"
+truck-meshalgo = { version = "0.4", default-features = false, features = ["tessellation", "filters"] }
+truck-polymesh = "0.6"
