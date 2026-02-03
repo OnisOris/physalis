@@ -11,6 +11,13 @@ use wgpu::util::DeviceExt;
 
 pub type Canvas = HtmlCanvasElement;
 
+#[derive(Clone, Copy, Debug)]
+pub struct OverlayLine {
+    pub a: [f32; 3],
+    pub b: [f32; 3],
+    pub color: [f32; 3],
+}
+
 #[derive(Debug, Error)]
 pub enum RenderError {
     #[error("surface creation failed: {0}")]
@@ -93,7 +100,7 @@ impl Renderer {
 
         let depth_texture = DepthTexture::new(&device, config.width, config.height);
 
-        let (mesh_pipeline, line_pipeline) =
+        let (mesh_pipeline, line_pipeline, overlay_pipeline) =
             create_pipelines(&device, &camera_bind_group_layout, config.format);
         let line_settings = LineSettings::default();
         let plane_visibility = PlaneVisibility::default();
@@ -110,11 +117,14 @@ impl Renderer {
             camera_bind_group,
             mesh_pipeline,
             line_pipeline,
+            overlay_pipeline,
             mesh_vertex_buffer: None,
             mesh_index_buffer: None,
             mesh_index_count: 0,
             line_vertex_buffer,
             line_vertex_count,
+            overlay_vertex_buffer: None,
+            overlay_vertex_count: 0,
             line_settings,
             plane_visibility,
             depth_texture,
@@ -333,6 +343,49 @@ impl Renderer {
         state.set_plane_visibility(xy, yz, zx);
     }
 
+    pub fn set_overlay_lines(&mut self, lines: Vec<OverlayLine>) {
+        let mut state = self.state.borrow_mut();
+        state.set_overlay_lines(lines);
+    }
+
+    pub fn clear_overlay_lines(&mut self) {
+        let mut state = self.state.borrow_mut();
+        state.set_overlay_lines(Vec::new());
+    }
+
+    pub fn camera_eye_target(&self) -> ([f32; 3], [f32; 3]) {
+        let state = self.state.borrow();
+        (
+            state.camera.eye().to_array(),
+            state.camera.target.to_array(),
+        )
+    }
+
+    pub fn camera_rotation(&self) -> [f32; 4] {
+        let state = self.state.borrow();
+        state.camera.rotation.to_array()
+    }
+
+    pub fn set_camera_rotation(&mut self, rotation: [f32; 4]) {
+        let mut state = self.state.borrow_mut();
+        state.camera.rotation = glam::Quat::from_array(rotation).normalize();
+        state.update_camera();
+    }
+
+    pub fn screen_ray(
+        &self,
+        cursor_x: f32,
+        cursor_y: f32,
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> ([f32; 3], [f32; 3]) {
+        let state = self.state.borrow();
+        let (o, d) = state
+            .camera
+            .screen_ray(cursor_x, cursor_y, viewport_width, viewport_height);
+        (o.to_array(), d.to_array())
+    }
+
     pub fn render(&mut self) {
         let mut state = self.state.borrow_mut();
         state.render();
@@ -391,11 +444,14 @@ struct RendererState {
     camera_bind_group: wgpu::BindGroup,
     mesh_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
+    overlay_pipeline: wgpu::RenderPipeline,
     mesh_vertex_buffer: Option<wgpu::Buffer>,
     mesh_index_buffer: Option<wgpu::Buffer>,
     mesh_index_count: u32,
     line_vertex_buffer: wgpu::Buffer,
     line_vertex_count: u32,
+    overlay_vertex_buffer: Option<wgpu::Buffer>,
+    overlay_vertex_count: u32,
     line_settings: LineSettings,
     plane_visibility: PlaneVisibility,
     depth_texture: DepthTexture,
@@ -456,6 +512,34 @@ impl RendererState {
                     contents: bytemuck::cast_slice(&vertices),
                     usage: wgpu::BufferUsages::VERTEX,
                 });
+    }
+
+    fn set_overlay_lines(&mut self, lines: Vec<OverlayLine>) {
+        if lines.is_empty() {
+            self.overlay_vertex_buffer = None;
+            self.overlay_vertex_count = 0;
+            return;
+        }
+
+        let mut vertices = Vec::with_capacity(lines.len() * 2);
+        for line in lines {
+            vertices.push(LineVertex {
+                position: line.a,
+                color: line.color,
+            });
+            vertices.push(LineVertex {
+                position: line.b,
+                color: line.color,
+            });
+        }
+        self.overlay_vertex_count = vertices.len() as u32;
+        self.overlay_vertex_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("overlay-line-vertex-buffer"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
     }
 
     fn update_camera(&mut self) {
@@ -552,6 +636,13 @@ impl RendererState {
             pass.set_pipeline(&self.line_pipeline);
             pass.set_vertex_buffer(0, self.line_vertex_buffer.slice(..));
             pass.draw(0..self.line_vertex_count, 0..1);
+
+            // Overlay gizmos
+            if let Some(buffer) = &self.overlay_vertex_buffer {
+                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(0..self.overlay_vertex_count, 0..1);
+            }
         }
 
         self.queue.submit(Some(encoder.finish()));
@@ -617,6 +708,34 @@ impl Camera {
         let view = Mat4::look_at_rh(eye, self.target, up);
         let proj = Mat4::perspective_rh(self.fov_y, self.aspect.max(0.01), self.near, self.far);
         proj * view
+    }
+
+    fn eye(&self) -> Vec3 {
+        self.target + self.rotation * Vec3::new(0.0, 0.0, self.radius)
+    }
+
+    fn screen_ray(
+        &self,
+        cursor_x: f32,
+        cursor_y: f32,
+        viewport_width: f32,
+        viewport_height: f32,
+    ) -> (Vec3, Vec3) {
+        let viewport_width = viewport_width.max(1.0);
+        let viewport_height = viewport_height.max(1.0);
+
+        let nx = (2.0 * cursor_x - viewport_width) / viewport_width;
+        let ny = (viewport_height - 2.0 * cursor_y) / viewport_height;
+
+        let inv = self.view_proj().inverse();
+        let near = inv * glam::Vec4::new(nx, ny, 0.0, 1.0);
+        let far = inv * glam::Vec4::new(nx, ny, 1.0, 1.0);
+        let _near = near.truncate() / near.w;
+        let far = far.truncate() / far.w;
+
+        let origin = self.eye();
+        let dir = (far - origin).normalize_or_zero();
+        (origin, dir)
     }
 
     fn orbit_arcball(&mut self, prev: (f32, f32), curr: (f32, f32), width: f32, height: f32) {
@@ -769,7 +888,11 @@ fn create_pipelines(
     device: &wgpu::Device,
     camera_layout: &wgpu::BindGroupLayout,
     color_format: wgpu::TextureFormat,
-) -> (wgpu::RenderPipeline, wgpu::RenderPipeline) {
+) -> (
+    wgpu::RenderPipeline,
+    wgpu::RenderPipeline,
+    wgpu::RenderPipeline,
+) {
     let mesh_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("mesh-shader"),
         source: wgpu::ShaderSource::Wgsl(MESH_SHADER.into()),
@@ -865,7 +988,47 @@ fn create_pipelines(
         cache: None,
     });
 
-    (mesh_pipeline, line_pipeline)
+    let overlay_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("overlay-line-pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &line_shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[LineVertex::desc()],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &line_shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: color_format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::LineList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            polygon_mode: wgpu::PolygonMode::Fill,
+            unclipped_depth: false,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: false,
+            depth_compare: wgpu::CompareFunction::Always,
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+
+    (mesh_pipeline, line_pipeline, overlay_pipeline)
 }
 
 fn create_line_buffers(

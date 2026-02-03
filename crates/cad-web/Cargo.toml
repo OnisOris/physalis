@@ -15,6 +15,7 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 console_error_panic_hook = "0.1"
 serde_json.workspace = true
+glam = "0.27"
 cad-core = { path = "../cad-core" }
 cad-geom = { path = "../cad-geom" }
 cad-render = { path = "../cad-render" }
@@ -23,7 +24,12 @@ web-sys = { version = "0.3", features = [
   "Window",
   "Document",
   "Location",
+  "CanvasRenderingContext2d",
   "HtmlCanvasElement",
+  "HtmlInputElement",
+  "DomRect",
+  "MouseEvent",
+  "KeyboardEvent",
   "WebSocket",
   "MessageEvent",
   "Event",

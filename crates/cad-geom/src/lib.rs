@@ -1,6 +1,7 @@
 //! Geometry layer backed by Truck.
 
-use cad_core::Model;
+use cad_core::{Model, ObjectId, Transform};
+use glam::{Mat4, Quat, Vec3};
 use thiserror::Error;
 use truck_meshalgo::{filters::*, tessellation::*};
 use truck_modeling::{builder, InnerSpace, Point3, Rad, Solid, Vector3};
@@ -21,6 +22,12 @@ pub struct TriMesh {
     pub indices: Vec<u32>,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Aabb {
+    pub min: [f32; 3],
+    pub max: [f32; 3],
+}
+
 impl TriMesh {
     pub fn append(&mut self, other: TriMesh) {
         let base = self.positions.len() as u32;
@@ -29,6 +36,26 @@ impl TriMesh {
         self.indices
             .extend(other.indices.into_iter().map(|idx| idx + base));
     }
+
+    pub fn append_transformed(&mut self, other: &TriMesh, transform: Mat4) {
+        let base = self.positions.len() as u32;
+        self.positions.extend(other.positions.iter().map(|p| {
+            let p = Vec3::from_array(*p);
+            let p = transform.transform_point3(p);
+            p.to_array()
+        }));
+        self.normals.extend(other.normals.iter().map(|n| {
+            let n = Vec3::from_array(*n);
+            let n = transform.transform_vector3(n);
+            if n.length_squared() > 1.0e-12 {
+                n.normalize().to_array()
+            } else {
+                [0.0, 1.0, 0.0]
+            }
+        }));
+        self.indices
+            .extend(other.indices.iter().copied().map(|idx| idx + base));
+    }
 }
 
 /// Scene that keeps model data separate from render meshes.
@@ -36,6 +63,9 @@ impl TriMesh {
 pub struct GeomScene {
     model: Model,
     solids: Vec<Solid>,
+    local_meshes: Vec<TriMesh>,
+    bounds_radius: Vec<f32>,
+    local_aabbs: Vec<Aabb>,
     mesh_cache: Option<TriMesh>,
     tolerance: f64,
 }
@@ -45,6 +75,9 @@ impl GeomScene {
         Self {
             model: Model::default(),
             solids: Vec::new(),
+            local_meshes: Vec::new(),
+            bounds_radius: Vec::new(),
+            local_aabbs: Vec::new(),
             mesh_cache: None,
             tolerance: 0.01,
         }
@@ -54,17 +87,61 @@ impl GeomScene {
         &self.model
     }
 
-    pub fn add_box(&mut self, w: f32, h: f32, d: f32) {
-        self.model.add_box(w, h, d);
-        self.solids.push(make_box(w as f64, h as f64, d as f64));
-        self.mesh_cache = None;
+    pub fn object_transform(&self, id: ObjectId) -> Option<Transform> {
+        self.model.object(id).map(|obj| obj.transform)
     }
 
-    pub fn add_cylinder(&mut self, r: f32, h: f32) {
-        self.model.add_cylinder(r, h);
-        self.solids
-            .push(make_cylinder(r as f64, h as f64));
+    pub fn bounds_radius(&self, id: ObjectId) -> Option<f32> {
+        self.model
+            .objects()
+            .iter()
+            .position(|obj| obj.id == id)
+            .and_then(|idx| self.bounds_radius.get(idx).copied())
+    }
+
+    pub fn local_aabb(&self, id: ObjectId) -> Option<Aabb> {
+        self.model
+            .objects()
+            .iter()
+            .position(|obj| obj.id == id)
+            .and_then(|idx| self.local_aabbs.get(idx).copied())
+    }
+
+    pub fn set_object_transform(&mut self, id: ObjectId, transform: Transform) -> bool {
+        if self.model.set_transform(id, transform) {
+            self.mesh_cache = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn add_box(&mut self, w: f32, h: f32, d: f32) -> ObjectId {
+        let id = self.model.add_box(w, h, d);
+        let solid = make_box(w as f64, h as f64, d as f64);
+        let mesh = tessellate_solid(&solid, self.tolerance);
+        let radius = mesh_bounds_radius(&mesh);
+        let aabb = mesh_bounds_aabb(&mesh);
+        self.solids.push(solid);
+        self.local_meshes.push(mesh);
+        self.bounds_radius.push(radius);
+        self.local_aabbs.push(aabb);
         self.mesh_cache = None;
+        id
+    }
+
+    pub fn add_cylinder(&mut self, r: f32, h: f32) -> ObjectId {
+        let id = self.model.add_cylinder(r, h);
+        let solid = make_cylinder(r as f64, h as f64);
+        let mesh = tessellate_solid(&solid, self.tolerance);
+        let radius = mesh_bounds_radius(&mesh);
+        let aabb = mesh_bounds_aabb(&mesh);
+        self.solids.push(solid);
+        self.local_meshes.push(mesh);
+        self.bounds_radius.push(radius);
+        self.local_aabbs.push(aabb);
+        self.mesh_cache = None;
+        id
     }
 
     pub fn mesh(&mut self) -> Result<TriMesh, GeomError> {
@@ -75,9 +152,11 @@ impl GeomScene {
             return Ok(mesh);
         }
         let mut combined = TriMesh::default();
-        for solid in &self.solids {
-            let mesh = tessellate_solid(solid, self.tolerance);
-            combined.append(mesh);
+        for (idx, obj) in self.model.objects().iter().enumerate() {
+            if let Some(mesh) = self.local_meshes.get(idx) {
+                let transform = transform_mat(obj.transform);
+                combined.append_transformed(mesh, transform);
+            }
         }
         self.mesh_cache = Some(combined.clone());
         Ok(combined)
@@ -166,5 +245,41 @@ fn face_normal(p0: Point3, p1: Point3, p2: Point3) -> [f32; 3] {
         [n.x as f32, n.y as f32, n.z as f32]
     } else {
         [0.0, 1.0, 0.0]
+    }
+}
+
+fn mesh_bounds_radius(mesh: &TriMesh) -> f32 {
+    mesh.positions
+        .iter()
+        .map(|p| Vec3::from_array(*p).length())
+        .fold(0.0, f32::max)
+}
+
+fn transform_mat(transform: Transform) -> Mat4 {
+    let t = Vec3::from_array(transform.translation);
+    let q = Quat::from_xyzw(
+        transform.rotation[0],
+        transform.rotation[1],
+        transform.rotation[2],
+        transform.rotation[3],
+    )
+    .normalize();
+    Mat4::from_translation(t) * Mat4::from_quat(q)
+}
+
+fn mesh_bounds_aabb(mesh: &TriMesh) -> Aabb {
+    let mut min = Vec3::splat(f32::INFINITY);
+    let mut max = Vec3::splat(f32::NEG_INFINITY);
+    for p in &mesh.positions {
+        let v = Vec3::from_array(*p);
+        min = min.min(v);
+        max = max.max(v);
+    }
+    if !min.is_finite() || !max.is_finite() {
+        return Aabb::default();
+    }
+    Aabb {
+        min: min.to_array(),
+        max: max.to_array(),
     }
 }

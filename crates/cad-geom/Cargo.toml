@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 cad-core = { path = "../cad-core" }
+glam = "0.27"
 thiserror.workspace = true
 truck-modeling = "0.6"
 truck-meshalgo = { version = "0.4", default-features = false, features = ["tessellation", "filters"] }

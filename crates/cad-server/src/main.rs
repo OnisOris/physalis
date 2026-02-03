@@ -50,9 +50,15 @@ async fn main() {
     let index_file = dist_dir.join("index.html");
 
     let app = Router::new()
-        .route("/favicon.ico", get(|| async { Redirect::temporary("/icon.svg") }))
+        .route(
+            "/favicon.ico",
+            get(|| async { Redirect::temporary("/icon.svg") }),
+        )
         .route("/ws", get(ws_handler))
-        .nest_service("/", ServeDir::new(dist_dir.clone()).append_index_html_on_directories(true))
+        .nest_service(
+            "/",
+            ServeDir::new(dist_dir.clone()).append_index_html_on_directories(true),
+        )
         .fallback_service(ServeFile::new(index_file))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
@@ -112,9 +118,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 respond_to: out_tx.clone(),
                             };
                             if state.job_tx.send(job).await.is_ok() {
-                                let _ = out_tx
-                                    .send(ServerMsg::JobAccepted { job_id })
-                                    .await;
+                                let _ = out_tx.send(ServerMsg::JobAccepted { job_id }).await;
                             } else {
                                 let _ = out_tx
                                     .send(ServerMsg::Log {

@@ -5,10 +5,22 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ClientMsg {
-    Hello { client_version: String },
-    AddBox { w: f32, h: f32, d: f32 },
-    AddCylinder { r: f32, h: f32 },
-    RequestHeavy { kind: String, payload: Option<String> },
+    Hello {
+        client_version: String,
+    },
+    AddBox {
+        w: f32,
+        h: f32,
+        d: f32,
+    },
+    AddCylinder {
+        r: f32,
+        h: f32,
+    },
+    RequestHeavy {
+        kind: String,
+        payload: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

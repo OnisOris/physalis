@@ -308,6 +308,7 @@ name = "cad-geom"
 version = "0.1.0"
 dependencies = [
  "cad-core",
+ "glam",
  "thiserror 1.0.69",
  "truck-meshalgo",
  "truck-modeling",
@@ -360,6 +361,7 @@ dependencies = [
  "cad-protocol",
  "cad-render",
  "console_error_panic_hook",
+ "glam",
  "js-sys",
  "leptos",
  "serde_json",
