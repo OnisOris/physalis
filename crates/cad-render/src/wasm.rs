@@ -68,19 +68,20 @@ impl Renderer {
             contents: bytemuck::bytes_of(&camera_uniform),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
-        let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("camera-bind-group-layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let camera_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("camera-bind-group-layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("camera-bind-group"),
             layout: &camera_bind_group_layout,
@@ -141,7 +142,8 @@ impl Renderer {
                     input.last_pos = Some((event.client_x() as f32, event.client_y() as f32));
                 }
             }) as Box<dyn FnMut(_)>);
-            let _ = canvas.add_event_listener_with_callback("mousedown", closure.as_ref().unchecked_ref());
+            let _ = canvas
+                .add_event_listener_with_callback("mousedown", closure.as_ref().unchecked_ref());
             self._closures.push(closure);
         }
 
@@ -149,17 +151,21 @@ impl Renderer {
         {
             let state = self.state.clone();
             let input = input.clone();
+            let canvas_el = canvas.clone();
             let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
                 let event = event.dyn_into::<MouseEvent>().unwrap();
                 let (prev, curr, dx, dy, button) = {
                     let mut input = input.borrow_mut();
+                    if input.active_button == Some(1) && (event.buttons() & 4) == 0 {
+                        input.active_button = None;
+                        input.last_pos = None;
+                        return;
+                    }
                     if let (Some((lx, ly)), Some(button)) = (input.last_pos, input.active_button) {
                         let cx = event.client_x() as f32;
                         let cy = event.client_y() as f32;
-                        let dx = cx - lx;
-                        let dy = cy - ly;
                         input.last_pos = Some((cx, cy));
-                        (Some((lx, ly)), (cx, cy), dx, dy, Some(button))
+                        (Some((lx, ly)), (cx, cy), cx - lx, cy - ly, Some(button))
                     } else {
                         (None, (0.0, 0.0), 0.0, 0.0, None)
                     }
@@ -171,47 +177,114 @@ impl Renderer {
                     if button == 1 {
                         if event.shift_key() {
                             if let Some(prev) = prev {
-                                let (width, height) = (state.config.width, state.config.height);
-                                state
-                                    .camera
-                                    .orbit_arcball(prev, curr, width, height);
+                                let rect = canvas_el.get_bounding_client_rect();
+                                let left = rect.left() as f32;
+                                let top = rect.top() as f32;
+                                let prev = (prev.0 - left, prev.1 - top);
+                                let curr = (curr.0 - left, curr.1 - top);
+                                state.camera.orbit_arcball(
+                                    prev,
+                                    curr,
+                                    canvas_el.client_width() as f32,
+                                    canvas_el.client_height() as f32,
+                                );
                             }
                         } else {
-                            state.camera.pan(dx, dy);
+                            state.camera.pan(
+                                dx,
+                                dy,
+                                canvas_el.client_width() as f32,
+                                canvas_el.client_height() as f32,
+                            );
                         }
                     }
                     state.update_camera();
                     state.render();
                 }
             }) as Box<dyn FnMut(_)>);
-            let _ = canvas.add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref());
+            if let Some(window) = web_sys::window() {
+                let _ = window.add_event_listener_with_callback(
+                    "mousemove",
+                    closure.as_ref().unchecked_ref(),
+                );
+            } else {
+                let _ = canvas.add_event_listener_with_callback(
+                    "mousemove",
+                    closure.as_ref().unchecked_ref(),
+                );
+            }
             self._closures.push(closure);
         }
 
-        // Mouse up / leave
-        for event_name in ["mouseup", "mouseleave"] {
-            let input = input.clone();
-            let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
-                let mut input = input.borrow_mut();
-                input.active_button = None;
-                input.last_pos = None;
-            }) as Box<dyn FnMut(_)>);
-            let _ = canvas.add_event_listener_with_callback(event_name, closure.as_ref().unchecked_ref());
-            self._closures.push(closure);
+        // Mouse up / blur
+        if let Some(window) = web_sys::window() {
+            // Mouse up
+            {
+                let input = input.clone();
+                let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
+                    let event = event.dyn_into::<MouseEvent>().unwrap();
+                    let mut input = input.borrow_mut();
+                    if input.active_button == Some(event.button()) {
+                        input.active_button = None;
+                        input.last_pos = None;
+                    }
+                }) as Box<dyn FnMut(_)>);
+                let _ = window
+                    .add_event_listener_with_callback("mouseup", closure.as_ref().unchecked_ref());
+                self._closures.push(closure);
+            }
+
+            // Clear drag state if the tab loses focus.
+            {
+                let input = input.clone();
+                let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+                    let mut input = input.borrow_mut();
+                    input.active_button = None;
+                    input.last_pos = None;
+                }) as Box<dyn FnMut(_)>);
+                let _ = window
+                    .add_event_listener_with_callback("blur", closure.as_ref().unchecked_ref());
+                self._closures.push(closure);
+            }
+        } else {
+            // Fallback for environments without a window.
+            for event_name in ["mouseup", "mouseleave"] {
+                let input = input.clone();
+                let closure = Closure::wrap(Box::new(move |_event: web_sys::Event| {
+                    let mut input = input.borrow_mut();
+                    input.active_button = None;
+                    input.last_pos = None;
+                }) as Box<dyn FnMut(_)>);
+                let _ = canvas
+                    .add_event_listener_with_callback(event_name, closure.as_ref().unchecked_ref());
+                self._closures.push(closure);
+            }
         }
 
         // Wheel
         {
             let state = self.state.clone();
+            let canvas_el = canvas.clone();
             let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
                 let event = event.dyn_into::<WheelEvent>().unwrap();
                 event.prevent_default();
                 let mut state = state.borrow_mut();
-                state.camera.zoom(event.delta_y() as f32);
+                let rect = canvas_el.get_bounding_client_rect();
+                let left = rect.left() as f32;
+                let top = rect.top() as f32;
+                let cursor_x = event.client_x() as f32 - left;
+                let cursor_y = event.client_y() as f32 - top;
+                state.camera.zoom_at(
+                    event.delta_y() as f32,
+                    (cursor_x, cursor_y),
+                    canvas_el.client_width() as f32,
+                    canvas_el.client_height() as f32,
+                );
                 state.update_camera();
                 state.render();
             }) as Box<dyn FnMut(_)>);
-            let _ = canvas.add_event_listener_with_callback("wheel", closure.as_ref().unchecked_ref());
+            let _ =
+                canvas.add_event_listener_with_callback("wheel", closure.as_ref().unchecked_ref());
             self._closures.push(closure);
         }
 
@@ -220,7 +293,8 @@ impl Renderer {
             let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
                 event.prevent_default();
             }) as Box<dyn FnMut(_)>);
-            let _ = canvas.add_event_listener_with_callback("contextmenu", closure.as_ref().unchecked_ref());
+            let _ = canvas
+                .add_event_listener_with_callback("contextmenu", closure.as_ref().unchecked_ref());
             self._closures.push(closure);
         }
 
@@ -236,7 +310,8 @@ impl Renderer {
                 state.render();
             }) as Box<dyn FnMut(_)>);
             if let Some(window) = web_sys::window() {
-                let _ = window.add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref());
+                let _ = window
+                    .add_event_listener_with_callback("resize", closure.as_ref().unchecked_ref());
             }
             self._closures.push(closure);
         }
@@ -337,19 +412,26 @@ impl RendererState {
 
         let mut vertices = Vec::with_capacity(mesh.positions.len());
         for (pos, normal) in mesh.positions.into_iter().zip(mesh.normals.into_iter()) {
-            vertices.push(Vertex { position: pos, normal });
+            vertices.push(Vertex {
+                position: pos,
+                normal,
+            });
         }
 
-        let vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("mesh-vertex-buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        let index_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("mesh-index-buffer"),
-            contents: bytemuck::cast_slice(&mesh.indices),
-            usage: wgpu::BufferUsages::INDEX,
-        });
+        let vertex_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh-vertex-buffer"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let index_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh-index-buffer"),
+                contents: bytemuck::cast_slice(&mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
 
         self.mesh_vertex_buffer = Some(vertex_buffer);
         self.mesh_index_buffer = Some(index_buffer);
@@ -367,16 +449,19 @@ impl RendererState {
     fn rebuild_line_buffer(&mut self) {
         let vertices = build_line_vertices(self.line_settings, self.plane_visibility);
         self.line_vertex_count = vertices.len() as u32;
-        self.line_vertex_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("line-vertex-buffer"),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        self.line_vertex_buffer =
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("line-vertex-buffer"),
+                    contents: bytemuck::cast_slice(&vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
     }
 
     fn update_camera(&mut self) {
         let uniform = CameraUniform::from_camera(&self.camera);
-        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
+        self.queue
+            .write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
 
     fn resize(&mut self, width: u32, height: u32) {
@@ -534,54 +619,80 @@ impl Camera {
         proj * view
     }
 
-    fn orbit_arcball(&mut self, prev: (f32, f32), curr: (f32, f32), width: u32, height: u32) {
-        let width = width.max(1) as f32;
-        let height = height.max(1) as f32;
+    fn orbit_arcball(&mut self, prev: (f32, f32), curr: (f32, f32), width: f32, height: f32) {
+        let width = width.max(1.0);
+        let height = height.max(1.0);
+
         let v0 = arcball_vector(prev.0, prev.1, width, height);
         let v1 = arcball_vector(curr.0, curr.1, width, height);
-        // Invert arcball direction to match expected drag behavior.
+
+        // Invert direction to match expected drag behavior.
         let axis = v1.cross(v0);
-        let axis_len = axis.length();
-        if axis_len < 1.0e-5 {
+        let axis_len2 = axis.length_squared();
+        if axis_len2 < 1.0e-10 {
             return;
         }
+
         let dot = v0.dot(v1).clamp(-1.0, 1.0);
         let angle = dot.acos();
-        let q = glam::Quat::from_axis_angle(axis / axis_len, angle);
-        self.rotation = (q * self.rotation).normalize();
-        self.constrain_up();
+        let q = glam::Quat::from_axis_angle(axis / axis_len2.sqrt(), angle);
+
+        // `q` is in camera-local space (screen axes), so apply on the right.
+        self.rotation = (self.rotation * q).normalize();
     }
 
-    fn pan(&mut self, dx: f32, dy: f32) {
+    fn pan(&mut self, dx: f32, dy: f32, viewport_width: f32, viewport_height: f32) {
+        let viewport_width = viewport_width.max(1.0);
+        let viewport_height = viewport_height.max(1.0);
+
         let right = (self.rotation * Vec3::X).normalize();
         let up = (self.rotation * Vec3::Y).normalize();
-        let scale = self.radius * 0.0025;
-        // Invert vertical pan only to match Fusion-style drag.
-        self.target += (right * dx + up * dy) * scale;
+
+        // Convert pixel delta to world delta at the target distance to feel like "grabbing" the view.
+        let world_height = 2.0 * self.radius * (self.fov_y * 0.5).tan();
+        let world_width = world_height * self.aspect.max(0.01);
+
+        let world_dx = dx / viewport_width * world_width;
+        let world_dy = dy / viewport_height * world_height;
+
+        // Drag right -> scene moves right => camera moves left => target moves left.
+        // Drag down -> scene moves down => camera moves up => target moves up.
+        self.target += (-right * world_dx + up * world_dy) * 0.85;
     }
 
-    fn zoom(&mut self, delta: f32) {
+    fn zoom_at(
+        &mut self,
+        delta: f32,
+        cursor: (f32, f32),
+        viewport_width: f32,
+        viewport_height: f32,
+    ) {
+        let viewport_width = viewport_width.max(1.0);
+        let viewport_height = viewport_height.max(1.0);
+        let (cursor_x, cursor_y) = cursor;
+
         let zoom = (1.0 + delta * 0.001).max(0.05);
-        self.radius = (self.radius * zoom).clamp(0.2, 200.0);
-    }
+        let new_radius = (self.radius * zoom).clamp(0.2, 200.0);
+        if (new_radius - self.radius).abs() < 1.0e-6 {
+            return;
+        }
 
-    fn constrain_up(&mut self) {
-        // Remove roll to keep "up" consistent and prevent inverted vertical drag.
-        let back = (self.rotation * Vec3::Z).normalize();
-        let world_up = Vec3::Y;
-        let mut right = world_up.cross(back);
-        if right.length_squared() < 1.0e-6 {
-            right = (self.rotation * Vec3::X).normalize();
-        } else {
-            right = right.normalize();
-        }
-        let mut up = back.cross(right).normalize();
-        if up.dot(world_up) < 0.0 {
-            right = -right;
-            up = -up;
-        }
-        let basis = glam::Mat3::from_cols(right, up, back);
-        self.rotation = glam::Quat::from_mat3(&basis).normalize();
+        // Mouse position in normalized device coordinates (-1..1), relative to the canvas.
+        let nx = (2.0 * cursor_x - viewport_width) / viewport_width;
+        let ny = (viewport_height - 2.0 * cursor_y) / viewport_height;
+
+        // Shift target on the view plane to keep zoom centered on the mouse cursor.
+        let tan_half_fov_y = (self.fov_y * 0.5).tan();
+        let half_h0 = self.radius * tan_half_fov_y;
+        let half_w0 = half_h0 * self.aspect.max(0.01);
+        let half_h1 = new_radius * tan_half_fov_y;
+        let half_w1 = half_h1 * self.aspect.max(0.01);
+
+        let right = self.rotation * Vec3::X;
+        let up = self.rotation * Vec3::Y;
+        self.target += right * (nx * (half_w0 - half_w1)) + up * (ny * (half_h0 - half_h1));
+
+        self.radius = new_radius;
     }
 }
 
@@ -832,9 +943,24 @@ fn add_grid_zx(vertices: &mut Vec<LineVertex>, settings: LineSettings) {
 }
 
 fn add_axes(vertices: &mut Vec<LineVertex>, axis_len: f32) {
-    push_line(vertices, [0.0, 0.0, 0.0], [axis_len, 0.0, 0.0], [1.0, 0.1, 0.1]);
-    push_line(vertices, [0.0, 0.0, 0.0], [0.0, axis_len, 0.0], [0.1, 1.0, 0.1]);
-    push_line(vertices, [0.0, 0.0, 0.0], [0.0, 0.0, axis_len], [0.1, 0.3, 1.0]);
+    push_line(
+        vertices,
+        [0.0, 0.0, 0.0],
+        [axis_len, 0.0, 0.0],
+        [1.0, 0.1, 0.1],
+    );
+    push_line(
+        vertices,
+        [0.0, 0.0, 0.0],
+        [0.0, axis_len, 0.0],
+        [0.1, 1.0, 0.1],
+    );
+    push_line(
+        vertices,
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, axis_len],
+        [0.1, 0.3, 1.0],
+    );
 }
 
 fn add_origin_cube(vertices: &mut Vec<LineVertex>, size: f32) {
