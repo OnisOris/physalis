@@ -30,6 +30,7 @@ fn App() -> impl IntoView {
     let (plane_xy, set_plane_xy) = signal(true);
     let (plane_yz, set_plane_yz) = signal(false);
     let (plane_zx, set_plane_zx) = signal(false);
+    let (object_count, set_object_count) = signal(0usize);
 
     let (tool_mode, set_tool_mode) = signal(EditorTool::None);
     let (selected_id, set_selected_id) = signal(None::<ObjectId>);
@@ -96,8 +97,14 @@ fn App() -> impl IntoView {
     let on_add_box = {
         let scene = scene.clone();
         let renderer = renderer.clone();
+        let set_object_count = set_object_count;
         move |_| {
-            let id = scene.borrow_mut().add_box(1.0, 1.0, 1.0);
+            let id = {
+                let mut scene = scene.borrow_mut();
+                let id = scene.add_box(1.0, 1.0, 1.0);
+                set_object_count.set(scene.model().objects().len());
+                id
+            };
             update_mesh(&scene, &renderer);
             set_selected_id.set(Some(id));
             if let Some(transform) = scene.borrow().object_transform(id) {
@@ -110,8 +117,14 @@ fn App() -> impl IntoView {
     let on_add_cylinder = {
         let scene = scene.clone();
         let renderer = renderer.clone();
+        let set_object_count = set_object_count;
         move |_| {
-            let id = scene.borrow_mut().add_cylinder(0.5, 1.5);
+            let id = {
+                let mut scene = scene.borrow_mut();
+                let id = scene.add_cylinder(0.5, 1.5);
+                set_object_count.set(scene.model().objects().len());
+                id
+            };
             update_mesh(&scene, &renderer);
             set_selected_id.set(Some(id));
             if let Some(transform) = scene.borrow().object_transform(id) {
@@ -159,12 +172,31 @@ fn App() -> impl IntoView {
     }
 
     view! {
-        <div class="app">
-            <header class="topbar">
-                <div class="topbar-left">
+        <div class="cad-shell">
+            <header class="cad-tabs">
+                <div class="tabs-left">
                     <div class="brand">"physalis"</div>
-                    <div class="topbar-group">
-                        <span class="topbar-label">"Model"</span>
+                    <button class="tab-btn active">"Model"</button>
+                    <button class="tab-btn">"Surface"</button>
+                    <button class="tab-btn">"Mesh"</button>
+                    <button class="tab-btn">"Tools"</button>
+                </div>
+                <div class="tabs-right">
+                    <span class="save-dot"></span>
+                    <span class="tabs-meta">"Saved"</span>
+                </div>
+            </header>
+            <section class="cad-ribbon">
+                <div class="ribbon-group">
+                    <div class="ribbon-title">"Create"</div>
+                    <div class="ribbon-buttons">
+                        <button class="tool-btn" on:click=on_add_box>"Box"</button>
+                        <button class="tool-btn" on:click=on_add_cylinder>"Cylinder"</button>
+                    </div>
+                </div>
+                <div class="ribbon-group">
+                    <div class="ribbon-title">"Modify"</div>
+                    <div class="ribbon-buttons">
                         <button
                             class="tool-btn"
                             class:active=move || tool_mode.get() == EditorTool::Move
@@ -175,126 +207,190 @@ fn App() -> impl IntoView {
                         <button
                             class="tool-btn"
                             class:active=move || tool_mode.get() == EditorTool::None
-                            on:click={
-                                move |_| {
-                                    set_tool_mode.set(EditorTool::None);
-                                }
-                            }
+                            on:click=move |_| set_tool_mode.set(EditorTool::None)
                         >
                             "View"
                         </button>
+                        <button class="tool-btn" on:click=on_boolean_stub>"Boolean"</button>
                     </div>
                 </div>
-                <div class="topbar-right">
-                    <span class="hint">"LMB: select • M: Move tool • Drag axes/rings"</span>
+                <div class="ribbon-group">
+                    <div class="ribbon-title">"Export"</div>
+                    <div class="ribbon-buttons">
+                        <button class="tool-btn" on:click=on_export_stub>"STEP"</button>
+                    </div>
                 </div>
-            </header>
-            <div class="workspace">
-                <aside class="panel">
-                    <h2>"Primitives"</h2>
-                    <div class="buttons">
-                        <button on:click=on_add_box>"Add Box"</button>
-                        <button on:click=on_add_cylinder>"Add Cylinder"</button>
-                        <button on:click=on_boolean_stub>"Boolean Subtract (A - B)"</button>
-                        <button on:click=on_export_stub>"Export STEP"</button>
+            </section>
+            <div class="cad-main">
+                <aside class="browser">
+                    <div class="browser-search">
+                        <input class="browser-input" type="text" placeholder="Search browser..." />
                     </div>
-                    <div class="planes">
-                        <h2>"Planes"</h2>
-                        <label class="toggle">
-                            <input
-                                type="checkbox"
-                                prop:checked=plane_xy
-                                on:change=move |ev| set_plane_xy.set(event_target_checked(&ev))
-                            />
-                            <span>"XY plane"</span>
-                        </label>
-                        <label class="toggle">
-                            <input
-                                type="checkbox"
-                                prop:checked=plane_yz
-                                on:change=move |ev| set_plane_yz.set(event_target_checked(&ev))
-                            />
-                            <span>"YZ plane"</span>
-                        </label>
-                        <label class="toggle">
-                            <input
-                                type="checkbox"
-                                prop:checked=plane_zx
-                                on:change=move |ev| set_plane_zx.set(event_target_checked(&ev))
-                            />
-                            <span>"ZX plane"</span>
-                        </label>
-                    </div>
-                    <div class="panel-note">
-                        <p>"MMB drag: pan"</p>
-                        <p>"Shift + MMB: orbit"</p>
-                        <p>"Wheel: zoom"</p>
+                    <div class="browser-content">
+                        <div class="browser-section">
+                            <h2>"Selection"</h2>
+                            <div class="tree-row">
+                                <span class="tree-label">"Active body"</span>
+                                <span class="tree-value">
+                                    {move || {
+                                        selected_id
+                                            .get()
+                                            .map(|id| format!("#{id}"))
+                                            .unwrap_or_else(|| "none".to_string())
+                                    }}
+                                </span>
+                            </div>
+                            <div class="tree-row">
+                                <span class="tree-label">"Objects"</span>
+                                <span class="tree-value">{move || object_count.get().to_string()}</span>
+                            </div>
+                        </div>
+                        <div class="browser-section">
+                            <h2>"Origin"</h2>
+                            <label class="toggle">
+                                <input
+                                    type="checkbox"
+                                    prop:checked=plane_xy
+                                    on:change=move |ev| set_plane_xy.set(event_target_checked(&ev))
+                                />
+                                <span>"XY plane"</span>
+                            </label>
+                            <label class="toggle">
+                                <input
+                                    type="checkbox"
+                                    prop:checked=plane_yz
+                                    on:change=move |ev| set_plane_yz.set(event_target_checked(&ev))
+                                />
+                                <span>"YZ plane"</span>
+                            </label>
+                            <label class="toggle">
+                                <input
+                                    type="checkbox"
+                                    prop:checked=plane_zx
+                                    on:change=move |ev| set_plane_zx.set(event_target_checked(&ev))
+                                />
+                                <span>"ZX plane"</span>
+                            </label>
+                        </div>
+                        <div class="panel-note">
+                            <p>"MMB drag: pan"</p>
+                            <p>"Shift + MMB: orbit"</p>
+                            <p>"Wheel: zoom"</p>
+                        </div>
                     </div>
                 </aside>
-                <main class="viewport">
+                <main class="viewport-frame">
+                    <div class="viewport-grid-bg"></div>
                     <canvas id="viewport-canvas" node_ref=canvas_ref></canvas>
                     <canvas id="viewcube-canvas" node_ref=viewcube_ref></canvas>
-                </main>
-                <aside
-                    class="inspector"
-                    class:open=move || selected_id.get().is_some() && tool_mode.get() == EditorTool::Move
-                >
-                    <h2>"Transform"</h2>
-                    <TransformPanel
-                        selected_id=selected_id
-                        transform_ui=transform_ui
-                        on_change={
-                            let scene = scene.clone();
-                            let renderer = renderer.clone();
-                            Rc::new(move |ui| {
-                                set_transform_ui.set(ui);
-                                if let Some(id) = selected_id.get_untracked() {
-                                    let t = ui.to_transform();
-                                    apply_transform(&scene, &renderer, id, t);
+                    <div class="viewport-toolbar">
+                        <button
+                            class="nav-btn"
+                            class:active=move || tool_mode.get() == EditorTool::None
+                            on:click=move |_| set_tool_mode.set(EditorTool::None)
+                        >
+                            "Select"
+                        </button>
+                        <button
+                            class="nav-btn"
+                            class:active=move || tool_mode.get() == EditorTool::Move
+                            on:click=move |_| set_tool_mode.set(EditorTool::Move)
+                        >
+                            "Move"
+                        </button>
+                        <button class="nav-btn" prop:disabled=true>
+                            "Zoom"
+                        </button>
+                    </div>
+                    <aside
+                        class="inspector-card"
+                        class:open=move || selected_id.get().is_some() && tool_mode.get() == EditorTool::Move
+                    >
+                        <h2>"Transform"</h2>
+                        <TransformPanel
+                            selected_id=selected_id
+                            transform_ui=transform_ui
+                            on_change={
+                                let scene = scene.clone();
+                                let renderer = renderer.clone();
+                                Rc::new(move |ui| {
+                                    set_transform_ui.set(ui);
+                                    if let Some(id) = selected_id.get_untracked() {
+                                        let t = ui.to_transform();
+                                        apply_transform(&scene, &renderer, id, t);
+                                        update_overlay(
+                                            &scene,
+                                            &renderer,
+                                            Some(id),
+                                            tool_mode.get_untracked() == EditorTool::Move,
+                                        );
+                                    }
+                                })
+                            }
+                            on_ok={
+                                let selected_id = selected_id;
+                                let transform_ui = transform_ui;
+                                Rc::new(move || {
+                                    if selected_id.get_untracked().is_some() {
+                                        set_baseline_transform
+                                            .set(Some(transform_ui.get_untracked().to_transform()));
+                                    }
+                                    set_tool_mode.set(EditorTool::None);
+                                })
+                            }
+                            on_cancel={
+                                let scene = scene.clone();
+                                let renderer = renderer.clone();
+                                Rc::new(move || {
+                                    let Some(id) = selected_id.get_untracked() else {
+                                        return;
+                                    };
+                                    let Some(base) = baseline_transform.get_untracked() else {
+                                        return;
+                                    };
+                                    apply_transform(&scene, &renderer, id, base);
+                                    set_transform_ui.set(TransformUi::from_transform(base));
                                     update_overlay(
                                         &scene,
                                         &renderer,
                                         Some(id),
                                         tool_mode.get_untracked() == EditorTool::Move,
                                     );
+                                    set_tool_mode.set(EditorTool::None);
+                                })
+                            }
+                        />
+                    </aside>
+                    <div class="viewport-status">
+                        <span>{move || format!("Objects: {}", object_count.get())}</span>
+                        <span>
+                            {move || {
+                                if tool_mode.get() == EditorTool::Move {
+                                    "Tool: Move".to_string()
+                                } else {
+                                    "Tool: View".to_string()
                                 }
-                            })
-                        }
-                        on_ok={
-                            let selected_id = selected_id;
-                            let transform_ui = transform_ui;
-                            Rc::new(move || {
-                                if selected_id.get_untracked().is_some() {
-                                    set_baseline_transform
-                                        .set(Some(transform_ui.get_untracked().to_transform()));
-                                }
-                                set_tool_mode.set(EditorTool::None);
-                            })
-                        }
-                        on_cancel={
-                            let scene = scene.clone();
-                            let renderer = renderer.clone();
-                            Rc::new(move || {
-                                let Some(id) = selected_id.get_untracked() else {
-                                    return;
-                                };
-                                let Some(base) = baseline_transform.get_untracked() else {
-                                    return;
-                                };
-                                apply_transform(&scene, &renderer, id, base);
-                                set_transform_ui.set(TransformUi::from_transform(base));
-                                update_overlay(
-                                    &scene,
-                                    &renderer,
-                                    Some(id),
-                                    tool_mode.get_untracked() == EditorTool::Move,
-                                );
-                                set_tool_mode.set(EditorTool::None);
-                            })
-                        }
-                    />
-                </aside>
+                            }}
+                        </span>
+                        <span class="status-hint">"LMB select | M move | MMB pan | Wheel zoom"</span>
+                    </div>
+                </main>
             </div>
+            <footer class="cad-timeline">
+                <div class="timeline-controls">
+                    <span class="timeline-title">"Feature History"</span>
+                    <button class="timeline-control">"Step Back"</button>
+                    <button class="timeline-control">"Play"</button>
+                    <button class="timeline-control">"Step Forward"</button>
+                </div>
+                <div class="timeline-track">
+                    <button class="timeline-chip">"01 Sketch"</button>
+                    <button class="timeline-chip active">"02 Extrude"</button>
+                    <button class="timeline-chip">"03 Fillet"</button>
+                    <button class="timeline-chip">"04 Pattern"</button>
+                    <button class="timeline-chip">"05 Inspect"</button>
+                </div>
+            </footer>
         </div>
     }
 }
