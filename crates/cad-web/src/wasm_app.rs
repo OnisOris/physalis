@@ -3,11 +3,13 @@ use cad_geom::GeomScene;
 use cad_protocol::{ClientMsg, ServerMsg};
 use cad_render::{OverlayLine, Renderer};
 use glam::{EulerRot, Mat3, Quat, Vec3};
+use js_sys::Date;
 use leptos::html::Canvas;
 use leptos::prelude::*;
 use std::cell::RefCell;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::{closure::Closure, JsCast};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{
     CanvasRenderingContext2d, HtmlInputElement, KeyboardEvent, MessageEvent, MouseEvent, WebSocket,
@@ -17,6 +19,186 @@ use web_sys::{
 pub fn start() {
     console_error_panic_hook::set_once();
     mount_to_body(|| view! { <App /> });
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UiLogLevel {
+    Success,
+    Warning,
+    Info,
+}
+
+#[derive(Clone)]
+struct UiLogEntry {
+    level: UiLogLevel,
+    message: String,
+    timestamp: String,
+}
+
+#[derive(Clone, Copy)]
+struct UiCommand {
+    id: &'static str,
+    label: &'static str,
+    category: &'static str,
+    shortcut: Option<&'static str>,
+}
+
+#[derive(Clone, Copy)]
+struct UiShortcut {
+    keys: &'static [&'static str],
+    description: &'static str,
+    category: &'static str,
+}
+
+const TOP_TABS: [&str; 5] = ["Model", "Surface", "Mesh", "Sheet", "Tools"];
+
+const UI_COMMANDS: [UiCommand; 10] = [
+    UiCommand {
+        id: "box",
+        label: "Create Box",
+        category: "Create",
+        shortcut: Some("B"),
+    },
+    UiCommand {
+        id: "sphere",
+        label: "Create Sphere",
+        category: "Create",
+        shortcut: Some("S"),
+    },
+    UiCommand {
+        id: "extrude",
+        label: "Extrude",
+        category: "Modify",
+        shortcut: Some("E"),
+    },
+    UiCommand {
+        id: "move",
+        label: "Move",
+        category: "Modify",
+        shortcut: Some("M"),
+    },
+    UiCommand {
+        id: "rotate",
+        label: "Rotate",
+        category: "Modify",
+        shortcut: Some("R"),
+    },
+    UiCommand {
+        id: "scale",
+        label: "Scale",
+        category: "Modify",
+        shortcut: Some("Ctrl+S"),
+    },
+    UiCommand {
+        id: "measure",
+        label: "Measure Distance",
+        category: "Inspect",
+        shortcut: Some("Ctrl+M"),
+    },
+    UiCommand {
+        id: "section",
+        label: "Section Analysis",
+        category: "Inspect",
+        shortcut: None,
+    },
+    UiCommand {
+        id: "import",
+        label: "Import File",
+        category: "File",
+        shortcut: Some("Ctrl+I"),
+    },
+    UiCommand {
+        id: "export",
+        label: "Export Model",
+        category: "File",
+        shortcut: Some("Ctrl+E"),
+    },
+];
+
+const TIMELINE_FEATURES: [(&str, &str, &str); 10] = [
+    ("f1", "01", "Sketch"),
+    ("f2", "02", "Extrude"),
+    ("f3", "03", "Fillet"),
+    ("f4", "04", "Chamfer"),
+    ("f5", "05", "Shell"),
+    ("f6", "06", "Pattern"),
+    ("f7", "07", "Mirror"),
+    ("f8", "08", "Thread"),
+    ("f9", "09", "Hole"),
+    ("f10", "10", "Extrude Cut"),
+];
+
+const UI_SHORTCUTS: [UiShortcut; 12] = [
+    UiShortcut {
+        keys: &["Ctrl", "K"],
+        description: "Open Command Palette",
+        category: "General",
+    },
+    UiShortcut {
+        keys: &["Ctrl", "N"],
+        description: "New Document",
+        category: "File",
+    },
+    UiShortcut {
+        keys: &["Ctrl", "S"],
+        description: "Save",
+        category: "File",
+    },
+    UiShortcut {
+        keys: &["Ctrl", "Z"],
+        description: "Undo",
+        category: "Edit",
+    },
+    UiShortcut {
+        keys: &["Ctrl", "Y"],
+        description: "Redo",
+        category: "Edit",
+    },
+    UiShortcut {
+        keys: &["B"],
+        description: "Create Box",
+        category: "Create",
+    },
+    UiShortcut {
+        keys: &["S"],
+        description: "Create Sphere",
+        category: "Create",
+    },
+    UiShortcut {
+        keys: &["E"],
+        description: "Extrude",
+        category: "Modify",
+    },
+    UiShortcut {
+        keys: &["M"],
+        description: "Move",
+        category: "Modify",
+    },
+    UiShortcut {
+        keys: &["R"],
+        description: "Rotate",
+        category: "Modify",
+    },
+    UiShortcut {
+        keys: &["F"],
+        description: "Fit View",
+        category: "View",
+    },
+    UiShortcut {
+        keys: &["Space"],
+        description: "Pan View",
+        category: "View",
+    },
+];
+
+fn ui_time_hms() -> String {
+    let now = Date::new_0();
+    format!(
+        "{:02}:{:02}:{:02}",
+        now.get_hours() as u32,
+        now.get_minutes() as u32,
+        now.get_seconds() as u32
+    )
 }
 
 #[component]
@@ -31,13 +213,93 @@ fn App() -> impl IntoView {
     let (plane_yz, set_plane_yz) = signal(false);
     let (plane_zx, set_plane_zx) = signal(false);
     let (object_count, set_object_count) = signal(0usize);
+    let (object_ids, set_object_ids) = signal(Vec::<ObjectId>::new());
 
     let (tool_mode, set_tool_mode) = signal(EditorTool::None);
     let (selected_id, set_selected_id) = signal(None::<ObjectId>);
     let (baseline_transform, set_baseline_transform) = signal(None::<Transform>);
     let (transform_ui, set_transform_ui) = signal(TransformUi::default());
+    let (active_tab, set_active_tab) = signal("Model".to_string());
+    let (active_tool, set_active_tool) = signal("select".to_string());
+    let (active_feature, set_active_feature) = signal("f3".to_string());
+    let (show_palette, set_show_palette) = signal(false);
+    let (palette_query, set_palette_query) = signal(String::new());
+    let (pending_command, set_pending_command) = signal(None::<String>);
+    let (show_project_info, set_show_project_info) = signal(true);
+    let (show_console, set_show_console) = signal(false);
+    let (console_expanded, set_console_expanded) = signal(true);
+    let (show_shortcuts, set_show_shortcuts) = signal(false);
+    let (browser_selected, set_browser_selected) = signal("body-1".to_string());
+    let (browser_search, set_browser_search) = signal(String::new());
+    let (expand_origin, set_expand_origin) = signal(true);
+    let (expand_sketches, set_expand_sketches) = signal(true);
+    let (expand_bodies, set_expand_bodies) = signal(true);
+    let (expand_components, set_expand_components) = signal(true);
+    let (expand_component_1, set_expand_component_1) = signal(true);
+    let (log_entries, set_log_entries) = signal(vec![
+        UiLogEntry {
+            level: UiLogLevel::Success,
+            message: "Extrude operation completed".to_string(),
+            timestamp: ui_time_hms(),
+        },
+        UiLogEntry {
+            level: UiLogLevel::Info,
+            message: "Sketch 1 created".to_string(),
+            timestamp: ui_time_hms(),
+        },
+        UiLogEntry {
+            level: UiLogLevel::Success,
+            message: "Fillet applied to 4 edges".to_string(),
+            timestamp: ui_time_hms(),
+        },
+    ]);
     let drag_state = Rc::new(RefCell::new(None::<DragState>));
     let editor_attached = Rc::new(RefCell::new(false));
+    let palette_key_listener = Rc::new(RefCell::new(false));
+
+    let push_log: Rc<dyn Fn(UiLogLevel, String)> = {
+        let set_log_entries = set_log_entries;
+        Rc::new(move |level, message| {
+            let entry = UiLogEntry {
+                level,
+                message,
+                timestamp: ui_time_hms(),
+            };
+            set_log_entries.update(|entries| {
+                entries.insert(0, entry);
+                if entries.len() > 50 {
+                    entries.truncate(50);
+                }
+            });
+        })
+    };
+
+    {
+        let palette_key_listener = palette_key_listener.clone();
+        let set_show_palette = set_show_palette;
+        Effect::new(move |_| {
+            if *palette_key_listener.borrow() {
+                return;
+            }
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            let handler = Closure::wrap(Box::new(move |ev: KeyboardEvent| {
+                if (ev.ctrl_key() || ev.meta_key()) && ev.key().eq_ignore_ascii_case("k") {
+                    ev.prevent_default();
+                    set_show_palette.update(|open| *open = !*open);
+                    return;
+                }
+                if ev.key() == "Escape" {
+                    set_show_palette.set(false);
+                }
+            }) as Box<dyn FnMut(_)>);
+            let _ = window
+                .add_event_listener_with_callback("keydown", handler.as_ref().unchecked_ref());
+            handler.forget();
+            *palette_key_listener.borrow_mut() = true;
+        });
+    }
 
     // WebSocket connection
     {
@@ -94,53 +356,189 @@ fn App() -> impl IntoView {
         });
     }
 
-    let on_add_box = {
+    let add_box_action: Rc<dyn Fn()> = {
         let scene = scene.clone();
         let renderer = renderer.clone();
         let set_object_count = set_object_count;
-        move |_| {
+        let set_object_ids = set_object_ids;
+        let set_selected_id = set_selected_id;
+        let set_transform_ui = set_transform_ui;
+        let set_baseline_transform = set_baseline_transform;
+        let set_browser_selected = set_browser_selected;
+        let set_active_tool = set_active_tool;
+        let push_log = push_log.clone();
+        Rc::new(move || {
             let id = {
                 let mut scene = scene.borrow_mut();
                 let id = scene.add_box(1.0, 1.0, 1.0);
                 set_object_count.set(scene.model().objects().len());
                 id
             };
+            set_object_ids.update(|ids| ids.push(id));
             update_mesh(&scene, &renderer);
             set_selected_id.set(Some(id));
+            set_browser_selected.set(format!("body-{}", id.saturating_add(1)));
+            set_active_tool.set("box".to_string());
             if let Some(transform) = scene.borrow().object_transform(id) {
                 set_baseline_transform.set(Some(transform));
                 set_transform_ui.set(TransformUi::from_transform(transform));
             }
-        }
+            (push_log.as_ref())(UiLogLevel::Success, format!("Body {} created", id + 1));
+        })
     };
 
-    let on_add_cylinder = {
+    let add_cylinder_action: Rc<dyn Fn()> = {
         let scene = scene.clone();
         let renderer = renderer.clone();
         let set_object_count = set_object_count;
-        move |_| {
+        let set_object_ids = set_object_ids;
+        let set_selected_id = set_selected_id;
+        let set_transform_ui = set_transform_ui;
+        let set_baseline_transform = set_baseline_transform;
+        let set_browser_selected = set_browser_selected;
+        let set_active_tool = set_active_tool;
+        let push_log = push_log.clone();
+        Rc::new(move || {
             let id = {
                 let mut scene = scene.borrow_mut();
                 let id = scene.add_cylinder(0.5, 1.5);
                 set_object_count.set(scene.model().objects().len());
                 id
             };
+            set_object_ids.update(|ids| ids.push(id));
             update_mesh(&scene, &renderer);
             set_selected_id.set(Some(id));
+            set_browser_selected.set(format!("body-{}", id.saturating_add(1)));
+            set_active_tool.set("cylinder".to_string());
             if let Some(transform) = scene.borrow().object_transform(id) {
                 set_baseline_transform.set(Some(transform));
                 set_transform_ui.set(TransformUi::from_transform(transform));
             }
+            (push_log.as_ref())(UiLogLevel::Success, format!("Cylinder {} created", id + 1));
+        })
+    };
+
+    let activate_move_tool: Rc<dyn Fn()> = {
+        let set_active_tool = set_active_tool;
+        let set_tool_mode = set_tool_mode;
+        Rc::new(move || {
+            set_active_tool.set("move".to_string());
+            set_tool_mode.set(EditorTool::Move);
+        })
+    };
+
+    let activate_select_tool: Rc<dyn Fn()> = {
+        let set_active_tool = set_active_tool;
+        let set_tool_mode = set_tool_mode;
+        Rc::new(move || {
+            set_active_tool.set("select".to_string());
+            set_tool_mode.set(EditorTool::None);
+        })
+    };
+
+    let on_add_box = {
+        let add_box_action = add_box_action.clone();
+        move |_| (add_box_action.as_ref())()
+    };
+
+    let on_add_cylinder = {
+        let add_cylinder_action = add_cylinder_action.clone();
+        move |_| (add_cylinder_action.as_ref())()
+    };
+
+    let on_boolean_stub = {
+        let push_log = push_log.clone();
+        let set_active_tool = set_active_tool;
+        move |_| {
+            set_active_tool.set("join".to_string());
+            log("Boolean subtract is not implemented yet.");
+            (push_log.as_ref())(
+                UiLogLevel::Warning,
+                "Boolean subtract is not implemented yet".to_string(),
+            );
         }
     };
 
-    let on_boolean_stub = move |_| {
-        log("Boolean subtract is not implemented yet.");
-    };
-
-    let on_export_stub = move |_| {
-        log("Export STEP is not implemented yet.");
-    };
+    {
+        let add_box_action = add_box_action.clone();
+        let add_cylinder_action = add_cylinder_action.clone();
+        let activate_move_tool = activate_move_tool.clone();
+        let activate_select_tool = activate_select_tool.clone();
+        let set_show_palette = set_show_palette;
+        let set_pending_command = set_pending_command;
+        let set_active_tool = set_active_tool;
+        let push_log = push_log.clone();
+        Effect::new(move |_| {
+            let Some(command_id) = pending_command.get() else {
+                return;
+            };
+            match command_id.as_str() {
+                "box" => (add_box_action.as_ref())(),
+                "move" => (activate_move_tool.as_ref())(),
+                "sphere" => {
+                    set_active_tool.set("sphere".to_string());
+                    (push_log.as_ref())(
+                        UiLogLevel::Info,
+                        "Sphere primitive is not connected yet".to_string(),
+                    );
+                }
+                "export" => {
+                    set_active_tool.set("export".to_string());
+                    (push_log.as_ref())(
+                        UiLogLevel::Warning,
+                        "Export command is not implemented yet".to_string(),
+                    );
+                }
+                "section" => {
+                    set_active_tool.set("section".to_string());
+                    (push_log.as_ref())(
+                        UiLogLevel::Info,
+                        "Section mode is not connected yet".to_string(),
+                    );
+                }
+                "import" => {
+                    set_active_tool.set("import".to_string());
+                    (push_log.as_ref())(
+                        UiLogLevel::Info,
+                        "Import is not connected yet".to_string(),
+                    );
+                }
+                "rotate" => {
+                    set_active_tool.set("rotate".to_string());
+                    (push_log.as_ref())(
+                        UiLogLevel::Info,
+                        "Rotate tool is not connected yet".to_string(),
+                    );
+                }
+                "extrude" => {
+                    set_active_tool.set("extrude".to_string());
+                    (push_log.as_ref())(
+                        UiLogLevel::Info,
+                        "Extrude is not connected yet".to_string(),
+                    );
+                }
+                "scale" => {
+                    set_active_tool.set("scale".to_string());
+                    (push_log.as_ref())(
+                        UiLogLevel::Info,
+                        "Scale tool is not connected yet".to_string(),
+                    );
+                }
+                "measure" => {
+                    (activate_select_tool.as_ref())();
+                    set_active_tool.set("measure".to_string());
+                    (push_log.as_ref())(
+                        UiLogLevel::Info,
+                        "Measure mode is not connected yet".to_string(),
+                    );
+                }
+                "cylinder" => (add_cylinder_action.as_ref())(),
+                _ => {}
+            }
+            set_show_palette.set(false);
+            set_pending_command.set(None);
+        });
+    }
 
     {
         let renderer = renderer.clone();
@@ -173,135 +571,452 @@ fn App() -> impl IntoView {
 
     view! {
         <div class="cad-shell">
-            <header class="cad-tabs">
-                <div class="tabs-left">
-                    <div class="brand">"physalis"</div>
-                    <button class="tab-btn active">"Model"</button>
-                    <button class="tab-btn">"Surface"</button>
-                    <button class="tab-btn">"Mesh"</button>
-                    <button class="tab-btn">"Tools"</button>
+            <div class="cad-topbar">
+                <div class="topbar-tabs">
+                    {TOP_TABS
+                        .into_iter()
+                        .map(|tab| {
+                            view! {
+                                <button
+                                    class="top-tab-btn"
+                                    class:active=move || active_tab.get() == tab
+                                    on:click=move |_| set_active_tab.set(tab.to_string())
+                                >
+                                    {tab}
+                                </button>
+                            }
+                        })
+                        .collect_view()}
                 </div>
-                <div class="tabs-right">
+                <div class="topbar-right">
                     <span class="save-dot"></span>
-                    <span class="tabs-meta">"Saved"</span>
+                    <span class="topbar-meta">"Saved"</span>
+                    <button class="icon-btn">"👤"</button>
+                    <button class="icon-btn">"⚙"</button>
                 </div>
-            </header>
+            </div>
+
             <section class="cad-ribbon">
                 <div class="ribbon-group">
-                    <div class="ribbon-title">"Create"</div>
-                    <div class="ribbon-buttons">
-                        <button class="tool-btn" on:click=on_add_box>"Box"</button>
-                        <button class="tool-btn" on:click=on_add_cylinder>"Cylinder"</button>
+                    <div class="ribbon-title">"CREATE"</div>
+                    <div class="ribbon-tools">
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "box" on:click=on_add_box>
+                            <span class="ribbon-icon">"▦"</span>
+                            <span class="ribbon-label">"Box"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "sphere" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("sphere".to_string());
+                                (push_log.as_ref())(UiLogLevel::Info, "Sphere primitive is not connected yet".to_string());
+                            }
+                        }>
+                            <span class="ribbon-icon">"◯"</span>
+                            <span class="ribbon-label">"Sphere"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "cylinder" on:click=on_add_cylinder>
+                            <span class="ribbon-icon">"◍"</span>
+                            <span class="ribbon-label">"Cylinder"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "cone" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("cone".to_string());
+                                (push_log.as_ref())(UiLogLevel::Info, "Cone primitive is not connected yet".to_string());
+                            }
+                        }>
+                            <span class="ribbon-icon">"△"</span>
+                            <span class="ribbon-label">"Cone"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "torus" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("torus".to_string());
+                                (push_log.as_ref())(UiLogLevel::Info, "Torus primitive is not connected yet".to_string());
+                            }
+                        }>
+                            <span class="ribbon-icon">"◎"</span>
+                            <span class="ribbon-label">"Torus"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "sketch" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("sketch".to_string());
+                                (push_log.as_ref())(UiLogLevel::Info, "Sketch mode is not connected yet".to_string());
+                            }
+                        }>
+                            <span class="ribbon-icon">"▭"</span>
+                            <span class="ribbon-label">"Sketch"</span>
+                        </button>
                     </div>
                 </div>
                 <div class="ribbon-group">
-                    <div class="ribbon-title">"Modify"</div>
-                    <div class="ribbon-buttons">
-                        <button
-                            class="tool-btn"
-                            class:active=move || tool_mode.get() == EditorTool::Move
-                            on:click=move |_| set_tool_mode.set(EditorTool::Move)
-                        >
-                            "Move"
+                    <div class="ribbon-title">"MODIFY"</div>
+                    <div class="ribbon-tools">
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "move" on:click={
+                            let activate_move_tool = activate_move_tool.clone();
+                            move |_| (activate_move_tool.as_ref())()
+                        }>
+                            <span class="ribbon-icon">"✥"</span>
+                            <span class="ribbon-label">"Move"</span>
                         </button>
-                        <button
-                            class="tool-btn"
-                            class:active=move || tool_mode.get() == EditorTool::None
-                            on:click=move |_| set_tool_mode.set(EditorTool::None)
-                        >
-                            "View"
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "rotate" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("rotate".to_string());
+                                (push_log.as_ref())(UiLogLevel::Info, "Rotate tool is not connected yet".to_string());
+                            }
+                        }>
+                            <span class="ribbon-icon">"↻"</span>
+                            <span class="ribbon-label">"Rotate"</span>
                         </button>
-                        <button class="tool-btn" on:click=on_boolean_stub>"Boolean"</button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "scale" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("scale".to_string());
+                                (push_log.as_ref())(UiLogLevel::Info, "Scale tool is not connected yet".to_string());
+                            }
+                        }>
+                            <span class="ribbon-icon">"⤢"</span>
+                            <span class="ribbon-label">"Scale"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "copy" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("copy".to_string());
+                                (push_log.as_ref())(UiLogLevel::Info, "Copy tool is not connected yet".to_string());
+                            }
+                        }>
+                            <span class="ribbon-icon">"⎘"</span>
+                            <span class="ribbon-label">"Copy"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "delete" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("delete".to_string());
+                                (push_log.as_ref())(UiLogLevel::Warning, "Delete tool is not connected yet".to_string());
+                            }
+                        }>
+                            <span class="ribbon-icon">"🗑"</span>
+                            <span class="ribbon-label">"Delete"</span>
+                        </button>
                     </div>
                 </div>
                 <div class="ribbon-group">
-                    <div class="ribbon-title">"Export"</div>
-                    <div class="ribbon-buttons">
-                        <button class="tool-btn" on:click=on_export_stub>"STEP"</button>
+                    <div class="ribbon-title">"ASSEMBLE"</div>
+                    <div class="ribbon-tools">
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "join" on:click=on_boolean_stub>
+                            <span class="ribbon-icon">"∞"</span>
+                            <span class="ribbon-label">"Join"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "pattern" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("pattern".to_string());
+                                (push_log.as_ref())(UiLogLevel::Info, "Pattern tool is not connected yet".to_string());
+                            }
+                        }>
+                            <span class="ribbon-icon">"▧"</span>
+                            <span class="ribbon-label">"Pattern"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "mirror" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("mirror".to_string());
+                                (push_log.as_ref())(UiLogLevel::Info, "Mirror tool is not connected yet".to_string());
+                            }
+                        }>
+                            <span class="ribbon-icon">"◧"</span>
+                            <span class="ribbon-label">"Mirror"</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="ribbon-group">
+                    <div class="ribbon-title">"CONSTRUCT"</div>
+                    <div class="ribbon-tools">
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "plane" on:click={
+                            let set_active_tool = set_active_tool;
+                            move |_| set_active_tool.set("plane".to_string())
+                        }>
+                            <span class="ribbon-icon">"▭"</span>
+                            <span class="ribbon-label">"Plane"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "axis" on:click={
+                            let set_active_tool = set_active_tool;
+                            move |_| set_active_tool.set("axis".to_string())
+                        }>
+                            <span class="ribbon-icon">"╱"</span>
+                            <span class="ribbon-label">"Axis"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "point" on:click={
+                            let set_active_tool = set_active_tool;
+                            move |_| set_active_tool.set("point".to_string())
+                        }>
+                            <span class="ribbon-icon">"•"</span>
+                            <span class="ribbon-label">"Point"</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="ribbon-group">
+                    <div class="ribbon-title">"INSPECT"</div>
+                    <div class="ribbon-tools">
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "measure" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("measure".to_string());
+                                (push_log.as_ref())(UiLogLevel::Info, "Measure mode is not connected yet".to_string());
+                            }
+                        }>
+                            <span class="ribbon-icon">"📏"</span>
+                            <span class="ribbon-label">"Measure"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "analyze" on:click={
+                            let set_active_tool = set_active_tool;
+                            move |_| set_active_tool.set("analyze".to_string())
+                        }>
+                            <span class="ribbon-icon">"◫"</span>
+                            <span class="ribbon-label">"Analyze"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "section" on:click={
+                            let set_active_tool = set_active_tool;
+                            move |_| set_active_tool.set("section".to_string())
+                        }>
+                            <span class="ribbon-icon">"◩"</span>
+                            <span class="ribbon-label">"Section"</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="ribbon-group">
+                    <div class="ribbon-title">"INSERT"</div>
+                    <div class="ribbon-tools">
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "import" on:click={
+                            let set_active_tool = set_active_tool;
+                            move |_| set_active_tool.set("import".to_string())
+                        }>
+                            <span class="ribbon-icon">"🗎"</span>
+                            <span class="ribbon-label">"Import"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "decal" on:click={
+                            let set_active_tool = set_active_tool;
+                            move |_| set_active_tool.set("decal".to_string())
+                        }>
+                            <span class="ribbon-icon">"◈"</span>
+                            <span class="ribbon-label">"Decal"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "mesh" on:click={
+                            let set_active_tool = set_active_tool;
+                            move |_| set_active_tool.set("mesh".to_string())
+                        }>
+                            <span class="ribbon-icon">"▥"</span>
+                            <span class="ribbon-label">"Mesh"</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="ribbon-group">
+                    <div class="ribbon-title">"SELECT"</div>
+                    <div class="ribbon-tools">
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "select" on:click={
+                            let activate_select_tool = activate_select_tool.clone();
+                            move |_| (activate_select_tool.as_ref())()
+                        }>
+                            <span class="ribbon-icon">"↖"</span>
+                            <span class="ribbon-label">"Select"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "window" on:click={
+                            let set_active_tool = set_active_tool;
+                            move |_| set_active_tool.set("window".to_string())
+                        }>
+                            <span class="ribbon-icon">"□"</span>
+                            <span class="ribbon-label">"Window"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "freeform" on:click={
+                            let set_active_tool = set_active_tool;
+                            move |_| set_active_tool.set("freeform".to_string())
+                        }>
+                            <span class="ribbon-icon">"✋"</span>
+                            <span class="ribbon-label">"Freeform"</span>
+                        </button>
                     </div>
                 </div>
             </section>
+
             <div class="cad-main">
                 <aside class="browser">
-                    <div class="browser-search">
-                        <input class="browser-input" type="text" placeholder="Search browser..." />
+                    <div class="browser-search-wrap">
+                        <span class="browser-search-icon">"⌕"</span>
+                        <input
+                            class="browser-input"
+                            type="text"
+                            placeholder="Search browser..."
+                            prop:value=move || browser_search.get()
+                            on:input=move |ev| set_browser_search.set(event_target_value(&ev))
+                        />
+                        <div class="browser-search-actions">
+                            <button class="small-icon-btn">"⛃"</button>
+                            <button class="small-icon-btn">"◉"</button>
+                        </div>
                     </div>
-                    <div class="browser-content">
-                        <div class="browser-section">
-                            <h2>"Selection"</h2>
-                            <div class="tree-row">
-                                <span class="tree-label">"Active body"</span>
-                                <span class="tree-value">
-                                    {move || {
-                                        selected_id
-                                            .get()
-                                            .map(|id| format!("#{id}"))
-                                            .unwrap_or_else(|| "none".to_string())
-                                    }}
+                    <div class="browser-tree">
+                        <button class="tree-row" class:selected=move || browser_selected.get() == "doc-settings" on:click=move |_| set_browser_selected.set("doc-settings".to_string())>
+                            <span class="tree-toggle blank">""</span>
+                            <span class="tree-icon">"🗎"</span>
+                            <span class="tree-text">"Document Settings"</span>
+                        </button>
+                        <button class="tree-row" class:selected=move || browser_selected.get() == "named-views" on:click=move |_| set_browser_selected.set("named-views".to_string())>
+                            <span class="tree-toggle blank">""</span>
+                            <span class="tree-icon">"🔖"</span>
+                            <span class="tree-text">"Named Views"</span>
+                        </button>
+
+                        <div class="tree-row tree-group" class:selected=move || browser_selected.get() == "origin">
+                            <button class="tree-toggle" on:click=move |_| set_expand_origin.update(|v| *v = !*v)>
+                                {move || if expand_origin.get() { "▾" } else { "▸" }}
+                            </button>
+                            <button class="tree-main-btn" on:click=move |_| set_browser_selected.set("origin".to_string())>
+                                <span class="tree-icon">"◎"</span>
+                                <span class="tree-text">"Origin"</span>
+                            </button>
+                        </div>
+                        <Show when=move || expand_origin.get()>
+                            <div class="tree-children">
+                                <label class="tree-check">
+                                    <input type="checkbox" prop:checked=plane_xy on:change=move |ev| set_plane_xy.set(event_target_checked(&ev)) />
+                                    <span>"XY Plane"</span>
+                                </label>
+                                <label class="tree-check">
+                                    <input type="checkbox" prop:checked=plane_zx on:change=move |ev| set_plane_zx.set(event_target_checked(&ev)) />
+                                    <span>"XZ Plane"</span>
+                                </label>
+                                <label class="tree-check">
+                                    <input type="checkbox" prop:checked=plane_yz on:change=move |ev| set_plane_yz.set(event_target_checked(&ev)) />
+                                    <span>"YZ Plane"</span>
+                                </label>
+                            </div>
+                        </Show>
+
+                        <div class="tree-row tree-group" class:selected=move || browser_selected.get() == "sketches">
+                            <button class="tree-toggle" on:click=move |_| set_expand_sketches.update(|v| *v = !*v)>
+                                {move || if expand_sketches.get() { "▾" } else { "▸" }}
+                            </button>
+                            <button class="tree-main-btn" on:click=move |_| set_browser_selected.set("sketches".to_string())>
+                                <span class="tree-icon">"✎"</span>
+                                <span class="tree-text">"Sketches"</span>
+                            </button>
+                        </div>
+                        <Show when=move || expand_sketches.get()>
+                            <div class="tree-children">
+                                <button class="tree-row tree-leaf">"Sketch 1"</button>
+                                <button class="tree-row tree-leaf">"Sketch 2"</button>
+                            </div>
+                        </Show>
+
+                        <div class="tree-row tree-group" class:selected=move || browser_selected.get() == "bodies">
+                            <button class="tree-toggle" on:click=move |_| set_expand_bodies.update(|v| *v = !*v)>
+                                {move || if expand_bodies.get() { "▾" } else { "▸" }}
+                            </button>
+                            <button class="tree-main-btn" on:click=move |_| set_browser_selected.set("bodies".to_string())>
+                                <span class="tree-icon">"◻"</span>
+                                <span class="tree-text">
+                                    {move || format!("Bodies ({})", object_count.get())}
                                 </span>
+                            </button>
+                        </div>
+                        <Show when=move || expand_bodies.get()>
+                            <div class="tree-children">
+                                {move || {
+                                    object_ids
+                                        .get()
+                                        .into_iter()
+                                        .enumerate()
+                                        .map(|(idx, object_id)| {
+                                            let row_id = format!("body-{}", idx + 1);
+                                            let row_id_for_class = row_id.clone();
+                                            view! {
+                                                <button
+                                                    class="tree-row tree-leaf"
+                                                    class:selected=move || browser_selected.get() == row_id_for_class
+                                                    on:click={
+                                                        let row_id = row_id.clone();
+                                                        move |_| {
+                                                            set_browser_selected.set(row_id.clone());
+                                                            set_selected_id.set(Some(object_id));
+                                                        }
+                                                    }
+                                                >
+                                                    <span class="tree-icon">"◻"</span>
+                                                    <span class="tree-text">{format!("Body {}", idx + 1)}</span>
+                                                </button>
+                                            }
+                                        })
+                                        .collect_view()
+                                }}
                             </div>
-                            <div class="tree-row">
-                                <span class="tree-label">"Objects"</span>
-                                <span class="tree-value">{move || object_count.get().to_string()}</span>
+                        </Show>
+
+                        <div class="tree-row tree-group" class:selected=move || browser_selected.get() == "components">
+                            <button class="tree-toggle" on:click=move |_| set_expand_components.update(|v| *v = !*v)>
+                                {move || if expand_components.get() { "▾" } else { "▸" }}
+                            </button>
+                            <button class="tree-main-btn" on:click=move |_| set_browser_selected.set("components".to_string())>
+                                <span class="tree-icon">"🗀"</span>
+                                <span class="tree-text">"Components"</span>
+                            </button>
+                        </div>
+                        <Show when=move || expand_components.get()>
+                            <div class="tree-children">
+                                <div class="tree-row tree-group">
+                                    <button class="tree-toggle" on:click=move |_| set_expand_component_1.update(|v| *v = !*v)>
+                                        {move || if expand_component_1.get() { "▾" } else { "▸" }}
+                                    </button>
+                                    <span class="tree-icon">"🗀"</span>
+                                    <span class="tree-text">"Component 1"</span>
+                                </div>
+                                <Show when=move || expand_component_1.get()>
+                                    <div class="tree-children">
+                                        <button class="tree-row tree-leaf">"Part A"</button>
+                                        <button class="tree-row tree-leaf">"Part B"</button>
+                                    </div>
+                                </Show>
+                                <button class="tree-row tree-leaf">"Component 2"</button>
                             </div>
-                        </div>
-                        <div class="browser-section">
-                            <h2>"Origin"</h2>
-                            <label class="toggle">
-                                <input
-                                    type="checkbox"
-                                    prop:checked=plane_xy
-                                    on:change=move |ev| set_plane_xy.set(event_target_checked(&ev))
-                                />
-                                <span>"XY plane"</span>
-                            </label>
-                            <label class="toggle">
-                                <input
-                                    type="checkbox"
-                                    prop:checked=plane_yz
-                                    on:change=move |ev| set_plane_yz.set(event_target_checked(&ev))
-                                />
-                                <span>"YZ plane"</span>
-                            </label>
-                            <label class="toggle">
-                                <input
-                                    type="checkbox"
-                                    prop:checked=plane_zx
-                                    on:change=move |ev| set_plane_zx.set(event_target_checked(&ev))
-                                />
-                                <span>"ZX plane"</span>
-                            </label>
-                        </div>
-                        <div class="panel-note">
-                            <p>"MMB drag: pan"</p>
-                            <p>"Shift + MMB: orbit"</p>
-                            <p>"Wheel: zoom"</p>
-                        </div>
+                        </Show>
                     </div>
                 </aside>
+
                 <main class="viewport-frame">
-                    <div class="viewport-grid-bg"></div>
+                    <div class="viewport-grid"></div>
                     <canvas id="viewport-canvas" node_ref=canvas_ref></canvas>
-                    <canvas id="viewcube-canvas" node_ref=viewcube_ref></canvas>
-                    <div class="viewport-toolbar">
-                        <button
-                            class="nav-btn"
-                            class:active=move || tool_mode.get() == EditorTool::None
-                            on:click=move |_| set_tool_mode.set(EditorTool::None)
-                        >
-                            "Select"
-                        </button>
-                        <button
-                            class="nav-btn"
-                            class:active=move || tool_mode.get() == EditorTool::Move
-                            on:click=move |_| set_tool_mode.set(EditorTool::Move)
-                        >
-                            "Move"
-                        </button>
-                        <button class="nav-btn" prop:disabled=true>
-                            "Zoom"
-                        </button>
+                    <div class="viewcube-wrap">
+                        <canvas id="viewcube-canvas" node_ref=viewcube_ref></canvas>
+                        <div class="viewcube-label">"View: Perspective"</div>
                     </div>
+
+                    <div class="viewport-nav">
+                        <button class="nav-tool" class:active=move || active_tool.get() == "select" on:click={
+                            let activate_select_tool = activate_select_tool.clone();
+                            move |_| (activate_select_tool.as_ref())()
+                        }>"⌖"</button>
+                        <button class="nav-tool" class:active=move || active_tool.get() == "freeform" on:click={
+                            let set_active_tool = set_active_tool;
+                            move |_| set_active_tool.set("freeform".to_string())
+                        }>"✋"</button>
+                        <div class="nav-divider"></div>
+                        <button class="nav-tool" title="Zoom In">"＋"</button>
+                        <button class="nav-tool" title="Zoom Out">"−"</button>
+                        <button class="nav-tool" title="Fit View">"⬚"</button>
+                    </div>
+
                     <aside
                         class="inspector-card"
                         class:open=move || selected_id.get().is_some() && tool_mode.get() == EditorTool::Move
@@ -330,17 +1045,19 @@ fn App() -> impl IntoView {
                             on_ok={
                                 let selected_id = selected_id;
                                 let transform_ui = transform_ui;
+                                let activate_select_tool = activate_select_tool.clone();
                                 Rc::new(move || {
                                     if selected_id.get_untracked().is_some() {
                                         set_baseline_transform
                                             .set(Some(transform_ui.get_untracked().to_transform()));
                                     }
-                                    set_tool_mode.set(EditorTool::None);
+                                    (activate_select_tool.as_ref())();
                                 })
                             }
                             on_cancel={
                                 let scene = scene.clone();
                                 let renderer = renderer.clone();
+                                let activate_select_tool = activate_select_tool.clone();
                                 Rc::new(move || {
                                     let Some(id) = selected_id.get_untracked() else {
                                         return;
@@ -356,41 +1073,281 @@ fn App() -> impl IntoView {
                                         Some(id),
                                         tool_mode.get_untracked() == EditorTool::Move,
                                     );
-                                    set_tool_mode.set(EditorTool::None);
+                                    (activate_select_tool.as_ref())();
                                 })
                             }
                         />
                     </aside>
+
                     <div class="viewport-status">
-                        <span>{move || format!("Objects: {}", object_count.get())}</span>
-                        <span>
-                            {move || {
+                        <div class="status-left">
+                            <span>"Zoom: 100%"</span>
+                            <span>"•"</span>
+                            <span class="status-ok">"Snap: On"</span>
+                            <span>"•"</span>
+                            <span>"Units: mm"</span>
+                        </div>
+                        <div class="status-right">
+                            <span>{move || format!("Objects: {}", object_count.get())}</span>
+                            <span>"•"</span>
+                            <span>{move || {
                                 if tool_mode.get() == EditorTool::Move {
                                     "Tool: Move".to_string()
                                 } else {
                                     "Tool: View".to_string()
                                 }
-                            }}
-                        </span>
-                        <span class="status-hint">"LMB select | M move | MMB pan | Wheel zoom"</span>
+                            }}</span>
+                            <span>"•"</span>
+                            <span>"FPS: 60"</span>
+                            <button class="help-btn">"?"</button>
+                        </div>
                     </div>
                 </main>
             </div>
-            <footer class="cad-timeline">
+
+            <footer class="timeline">
                 <div class="timeline-controls">
+                    <button class="timeline-control">"⏮"</button>
+                    <button class="timeline-control">"▶"</button>
+                    <button class="timeline-control">"⏭"</button>
+                    <div class="timeline-divider"></div>
                     <span class="timeline-title">"Feature History"</span>
-                    <button class="timeline-control">"Step Back"</button>
-                    <button class="timeline-control">"Play"</button>
-                    <button class="timeline-control">"Step Forward"</button>
                 </div>
                 <div class="timeline-track">
-                    <button class="timeline-chip">"01 Sketch"</button>
-                    <button class="timeline-chip active">"02 Extrude"</button>
-                    <button class="timeline-chip">"03 Fillet"</button>
-                    <button class="timeline-chip">"04 Pattern"</button>
-                    <button class="timeline-chip">"05 Inspect"</button>
+                    <button class="timeline-scroll-btn">"◀"</button>
+                    <div class="timeline-items">
+                        {TIMELINE_FEATURES
+                            .into_iter()
+                            .map(|(id, number, label)| {
+                                view! {
+                                    <button
+                                        class="timeline-chip"
+                                        class:active=move || active_feature.get() == id
+                                        on:click=move |_| set_active_feature.set(id.to_string())
+                                    >
+                                        <span class="chip-number">{number}</span>
+                                        <span class="chip-label">{label}</span>
+                                    </button>
+                                }
+                            })
+                            .collect_view()}
+                    </div>
+                    <button class="timeline-scroll-btn">"▶"</button>
                 </div>
             </footer>
+
+            <Show when=move || show_palette.get()>
+                <div class="command-backdrop" on:click=move |_| set_show_palette.set(false)>
+                    <div class="command-dialog" on:click=move |ev| ev.stop_propagation()>
+                        <div class="command-head">
+                            <div class="command-input-wrap">
+                                <span class="command-search-icon">"⌕"</span>
+                                <input
+                                    class="command-input"
+                                    type="text"
+                                    placeholder="Search commands..."
+                                    prop:value=move || palette_query.get()
+                                    on:input=move |ev| set_palette_query.set(event_target_value(&ev))
+                                />
+                                <button class="command-close" on:click=move |_| set_show_palette.set(false)>"✕"</button>
+                            </div>
+                        </div>
+                        <div class="command-list">
+                            {move || {
+                                let query = palette_query.get().to_lowercase();
+                                let filtered: Vec<UiCommand> = UI_COMMANDS
+                                    .into_iter()
+                                    .filter(|cmd| {
+                                        if query.is_empty() {
+                                            return true;
+                                        }
+                                        cmd.label.to_lowercase().contains(&query)
+                                            || cmd.category.to_lowercase().contains(&query)
+                                    })
+                                    .collect();
+
+                                if filtered.is_empty() {
+                                    view! { <div class="command-empty">"No commands found"</div> }.into_any()
+                                } else {
+                                    view! {
+                                        <>
+                                            {filtered
+                                                .into_iter()
+                                                .map(|cmd| {
+                                                    view! {
+                                                        <button
+                                                            class="command-row"
+                                                            on:click=move |_| {
+                                                                set_pending_command.set(Some(cmd.id.to_string()));
+                                                            }
+                                                        >
+                                                            <div class="command-row-main">
+                                                                <span class="command-row-icon">"⌘"</span>
+                                                                <span class="command-row-label">{cmd.label}</span>
+                                                                <span class="command-row-category">{cmd.category}</span>
+                                                            </div>
+                                                            <span class="command-row-shortcut">{cmd.shortcut.unwrap_or("")}</span>
+                                                        </button>
+                                                    }
+                                                })
+                                                .collect_view()}
+                                        </>
+                                    }
+                                        .into_any()
+                                }
+                            }}
+                        </div>
+                        <div class="command-foot">
+                            <span>"Type to search"</span>
+                            <span>"↑↓ Navigate • ↵ Execute • Esc Close"</span>
+                        </div>
+                    </div>
+                </div>
+            </Show>
+
+            <Show
+                when=move || !show_console.get()
+                fallback=move || {
+                    view! {
+                        <div class="console-panel">
+                            <div class="console-head">
+                                <div class="console-head-left">
+                                    <span class="console-icon">"⌨"</span>
+                                    <span class="console-title">"Console"</span>
+                                    <span class="console-badge">{move || log_entries.get().len().to_string()}</span>
+                                </div>
+                                <div class="console-head-right">
+                                    <button class="console-head-btn" on:click=move |_| set_console_expanded.update(|open| *open = !*open)>
+                                        {move || if console_expanded.get() { "▾" } else { "▴" }}
+                                    </button>
+                                    <button class="console-head-btn" on:click=move |_| set_show_console.set(false)>"✕"</button>
+                                </div>
+                            </div>
+                            <Show when=move || console_expanded.get()>
+                                <div class="console-list">
+                                    {move || {
+                                        log_entries
+                                            .get()
+                                            .into_iter()
+                                            .map(|entry| {
+                                                let level_class = match entry.level {
+                                                    UiLogLevel::Success => "success",
+                                                    UiLogLevel::Warning => "warning",
+                                                    UiLogLevel::Info => "info",
+                                                };
+                                                let level_icon = match entry.level {
+                                                    UiLogLevel::Success => "✓",
+                                                    UiLogLevel::Warning => "⚠",
+                                                    UiLogLevel::Info => "ℹ",
+                                                };
+                                                view! {
+                                                    <div class="console-row">
+                                                        <span class={format!("console-level {}", level_class)}>{level_icon}</span>
+                                                        <div class="console-row-main">
+                                                            <div class="console-msg">{entry.message}</div>
+                                                            <div class="console-time">{entry.timestamp}</div>
+                                                        </div>
+                                                    </div>
+                                                }
+                                            })
+                                            .collect_view()
+                                    }}
+                                </div>
+                                <div class="console-foot">
+                                    <button class="console-clear" on:click=move |_| set_log_entries.set(Vec::new())>
+                                        "Clear all"
+                                    </button>
+                                    <span>"Last updated: now"</span>
+                                </div>
+                            </Show>
+                        </div>
+                    }
+                        .into_any()
+                }
+            >
+                <button class="console-fab" on:click=move |_| set_show_console.set(true)>
+                    <span class="console-icon">"⌨"</span>
+                    <span>"Console"</span>
+                    <span class="console-badge">{move || log_entries.get().len().to_string()}</span>
+                </button>
+            </Show>
+
+            <Show
+                when=move || !show_shortcuts.get()
+                fallback=move || {
+                    view! {
+                        <div class="shortcuts-panel">
+                            <div class="shortcuts-head">
+                                <div class="shortcuts-title-wrap">
+                                    <span class="shortcuts-icon">"⌨"</span>
+                                    <span class="shortcuts-title">"Keyboard Shortcuts"</span>
+                                </div>
+                                <button class="shortcuts-close" on:click=move |_| set_show_shortcuts.set(false)>"✕"</button>
+                            </div>
+                            <div class="shortcuts-list">
+                                {["General", "File", "Edit", "Create", "Modify", "View"]
+                                    .into_iter()
+                                    .map(|category| {
+                                        view! {
+                                            <div class="shortcut-group">
+                                                <div class="shortcut-group-title">{category}</div>
+                                                {UI_SHORTCUTS
+                                                    .into_iter()
+                                                    .filter(|item| item.category == category)
+                                                    .map(|item| {
+                                                        view! {
+                                                            <div class="shortcut-row">
+                                                                <span class="shortcut-desc">{item.description}</span>
+                                                                <span class="shortcut-keys">
+                                                                    {item
+                                                                        .keys
+                                                                        .iter()
+                                                                        .map(|key| {
+                                                                            view! { <kbd>{*key}</kbd> }
+                                                                        })
+                                                                        .collect_view()}
+                                                                </span>
+                                                            </div>
+                                                        }
+                                                    })
+                                                    .collect_view()}
+                                            </div>
+                                        }
+                                    })
+                                    .collect_view()}
+                            </div>
+                        </div>
+                    }
+                        .into_any()
+                }
+            >
+                <button class="shortcuts-fab" on:click=move |_| set_show_shortcuts.set(true)>
+                    <span class="shortcuts-icon">"⌨"</span>
+                    <span>"Shortcuts"</span>
+                </button>
+            </Show>
+
+            <Show when=move || show_project_info.get()>
+                <div class="project-info">
+                    <div class="project-info-head">
+                        <span class="project-title">"Project Information"</span>
+                        <button class="project-close" on:click=move |_| set_show_project_info.set(false)>"✕"</button>
+                    </div>
+                    <div class="project-row">
+                        <span class="project-row-label">"Project Name"</span>
+                        <span class="project-row-value">"Mechanical Assembly v2"</span>
+                    </div>
+                    <div class="project-row">
+                        <span class="project-row-label">"Created by"</span>
+                        <span class="project-row-value">"Design Engineer"</span>
+                    </div>
+                    <div class="project-row">
+                        <span class="project-row-label">"Last Modified"</span>
+                        <span class="project-row-value">"Feb 16, 2026 10:23"</span>
+                    </div>
+                    <div class="project-foot">"10 Features • 3 Components • 2 Bodies"</div>
+                </div>
+            </Show>
         </div>
     }
 }
