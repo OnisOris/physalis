@@ -1,3 +1,4 @@
+use crate::ui_icons::{IconName, UiIcon};
 use cad_core::{ObjectId, Transform};
 use cad_geom::GeomScene;
 use cad_protocol::{ClientMsg, ServerMsg};
@@ -199,6 +200,22 @@ fn ui_time_hms() -> String {
         now.get_minutes() as u32,
         now.get_seconds() as u32
     )
+}
+
+fn command_icon(id: &str) -> IconName {
+    match id {
+        "box" => IconName::Box,
+        "sphere" => IconName::Circle,
+        "extrude" => IconName::Square,
+        "move" => IconName::Move,
+        "rotate" => IconName::RotateCw,
+        "scale" => IconName::Scale,
+        "measure" => IconName::Ruler,
+        "section" => IconName::Eye,
+        "import" => IconName::File,
+        "export" => IconName::FileText,
+        _ => IconName::Command,
+    }
 }
 
 #[component]
@@ -591,8 +608,12 @@ fn App() -> impl IntoView {
                 <div class="topbar-right">
                     <span class="save-dot"></span>
                     <span class="topbar-meta">"Saved"</span>
-                    <button class="icon-btn">"👤"</button>
-                    <button class="icon-btn">"⚙"</button>
+                    <button class="icon-btn">
+                        <UiIcon name=IconName::User size=16 class="icon-btn-icon" />
+                    </button>
+                    <button class="icon-btn">
+                        <UiIcon name=IconName::Settings size=16 class="icon-btn-icon" />
+                    </button>
                 </div>
             </div>
 
@@ -601,7 +622,7 @@ fn App() -> impl IntoView {
                     <div class="ribbon-title">"CREATE"</div>
                     <div class="ribbon-tools">
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "box" on:click=on_add_box>
-                            <span class="ribbon-icon">"▦"</span>
+                            <UiIcon name=IconName::Box size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Box"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "sphere" on:click={
@@ -612,11 +633,11 @@ fn App() -> impl IntoView {
                                 (push_log.as_ref())(UiLogLevel::Info, "Sphere primitive is not connected yet".to_string());
                             }
                         }>
-                            <span class="ribbon-icon">"◯"</span>
+                            <UiIcon name=IconName::Circle size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Sphere"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "cylinder" on:click=on_add_cylinder>
-                            <span class="ribbon-icon">"◍"</span>
+                            <UiIcon name=IconName::Cylinder size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Cylinder"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "cone" on:click={
@@ -627,7 +648,7 @@ fn App() -> impl IntoView {
                                 (push_log.as_ref())(UiLogLevel::Info, "Cone primitive is not connected yet".to_string());
                             }
                         }>
-                            <span class="ribbon-icon">"△"</span>
+                            <UiIcon name=IconName::Cone size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Cone"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "torus" on:click={
@@ -638,7 +659,7 @@ fn App() -> impl IntoView {
                                 (push_log.as_ref())(UiLogLevel::Info, "Torus primitive is not connected yet".to_string());
                             }
                         }>
-                            <span class="ribbon-icon">"◎"</span>
+                            <UiIcon name=IconName::Torus size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Torus"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "sketch" on:click={
@@ -649,8 +670,19 @@ fn App() -> impl IntoView {
                                 (push_log.as_ref())(UiLogLevel::Info, "Sketch mode is not connected yet".to_string());
                             }
                         }>
-                            <span class="ribbon-icon">"▭"</span>
+                            <UiIcon name=IconName::Square size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Sketch"</span>
+                        </button>
+                        <button class="ribbon-tool" class:active=move || active_tool.get() == "more" on:click={
+                            let set_active_tool = set_active_tool;
+                            let push_log = push_log.clone();
+                            move |_| {
+                                set_active_tool.set("more".to_string());
+                                (push_log.as_ref())(UiLogLevel::Info, "More tools are not connected yet".to_string());
+                            }
+                        }>
+                            <UiIcon name=IconName::ChevronDown size=20 class="ribbon-icon" />
+                            <span class="ribbon-label">"More"</span>
                         </button>
                     </div>
                 </div>
@@ -661,7 +693,7 @@ fn App() -> impl IntoView {
                             let activate_move_tool = activate_move_tool.clone();
                             move |_| (activate_move_tool.as_ref())()
                         }>
-                            <span class="ribbon-icon">"✥"</span>
+                            <UiIcon name=IconName::Move size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Move"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "rotate" on:click={
@@ -672,7 +704,7 @@ fn App() -> impl IntoView {
                                 (push_log.as_ref())(UiLogLevel::Info, "Rotate tool is not connected yet".to_string());
                             }
                         }>
-                            <span class="ribbon-icon">"↻"</span>
+                            <UiIcon name=IconName::RotateCw size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Rotate"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "scale" on:click={
@@ -683,7 +715,7 @@ fn App() -> impl IntoView {
                                 (push_log.as_ref())(UiLogLevel::Info, "Scale tool is not connected yet".to_string());
                             }
                         }>
-                            <span class="ribbon-icon">"⤢"</span>
+                            <UiIcon name=IconName::Scale size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Scale"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "copy" on:click={
@@ -694,7 +726,7 @@ fn App() -> impl IntoView {
                                 (push_log.as_ref())(UiLogLevel::Info, "Copy tool is not connected yet".to_string());
                             }
                         }>
-                            <span class="ribbon-icon">"⎘"</span>
+                            <UiIcon name=IconName::Copy size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Copy"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "delete" on:click={
@@ -705,7 +737,7 @@ fn App() -> impl IntoView {
                                 (push_log.as_ref())(UiLogLevel::Warning, "Delete tool is not connected yet".to_string());
                             }
                         }>
-                            <span class="ribbon-icon">"🗑"</span>
+                            <UiIcon name=IconName::Trash2 size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Delete"</span>
                         </button>
                     </div>
@@ -714,7 +746,7 @@ fn App() -> impl IntoView {
                     <div class="ribbon-title">"ASSEMBLE"</div>
                     <div class="ribbon-tools">
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "join" on:click=on_boolean_stub>
-                            <span class="ribbon-icon">"∞"</span>
+                            <UiIcon name=IconName::Link size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Join"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "pattern" on:click={
@@ -725,7 +757,7 @@ fn App() -> impl IntoView {
                                 (push_log.as_ref())(UiLogLevel::Info, "Pattern tool is not connected yet".to_string());
                             }
                         }>
-                            <span class="ribbon-icon">"▧"</span>
+                            <UiIcon name=IconName::Grid3x3 size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Pattern"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "mirror" on:click={
@@ -736,7 +768,7 @@ fn App() -> impl IntoView {
                                 (push_log.as_ref())(UiLogLevel::Info, "Mirror tool is not connected yet".to_string());
                             }
                         }>
-                            <span class="ribbon-icon">"◧"</span>
+                            <UiIcon name=IconName::Layers size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Mirror"</span>
                         </button>
                     </div>
@@ -748,21 +780,21 @@ fn App() -> impl IntoView {
                             let set_active_tool = set_active_tool;
                             move |_| set_active_tool.set("plane".to_string())
                         }>
-                            <span class="ribbon-icon">"▭"</span>
+                            <UiIcon name=IconName::Square size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Plane"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "axis" on:click={
                             let set_active_tool = set_active_tool;
                             move |_| set_active_tool.set("axis".to_string())
                         }>
-                            <span class="ribbon-icon">"╱"</span>
+                            <UiIcon name=IconName::Ruler size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Axis"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "point" on:click={
                             let set_active_tool = set_active_tool;
                             move |_| set_active_tool.set("point".to_string())
                         }>
-                            <span class="ribbon-icon">"•"</span>
+                            <UiIcon name=IconName::Circle size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Point"</span>
                         </button>
                     </div>
@@ -778,21 +810,21 @@ fn App() -> impl IntoView {
                                 (push_log.as_ref())(UiLogLevel::Info, "Measure mode is not connected yet".to_string());
                             }
                         }>
-                            <span class="ribbon-icon">"📏"</span>
+                            <UiIcon name=IconName::Ruler size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Measure"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "analyze" on:click={
                             let set_active_tool = set_active_tool;
                             move |_| set_active_tool.set("analyze".to_string())
                         }>
-                            <span class="ribbon-icon">"◫"</span>
+                            <UiIcon name=IconName::Gauge size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Analyze"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "section" on:click={
                             let set_active_tool = set_active_tool;
                             move |_| set_active_tool.set("section".to_string())
                         }>
-                            <span class="ribbon-icon">"◩"</span>
+                            <UiIcon name=IconName::Eye size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Section"</span>
                         </button>
                     </div>
@@ -804,21 +836,21 @@ fn App() -> impl IntoView {
                             let set_active_tool = set_active_tool;
                             move |_| set_active_tool.set("import".to_string())
                         }>
-                            <span class="ribbon-icon">"🗎"</span>
+                            <UiIcon name=IconName::File size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Import"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "decal" on:click={
                             let set_active_tool = set_active_tool;
                             move |_| set_active_tool.set("decal".to_string())
                         }>
-                            <span class="ribbon-icon">"◈"</span>
+                            <UiIcon name=IconName::Image size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Decal"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "mesh" on:click={
                             let set_active_tool = set_active_tool;
                             move |_| set_active_tool.set("mesh".to_string())
                         }>
-                            <span class="ribbon-icon">"▥"</span>
+                            <UiIcon name=IconName::Database size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Mesh"</span>
                         </button>
                     </div>
@@ -830,21 +862,21 @@ fn App() -> impl IntoView {
                             let activate_select_tool = activate_select_tool.clone();
                             move |_| (activate_select_tool.as_ref())()
                         }>
-                            <span class="ribbon-icon">"↖"</span>
+                            <UiIcon name=IconName::MousePointer size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Select"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "window" on:click={
                             let set_active_tool = set_active_tool;
                             move |_| set_active_tool.set("window".to_string())
                         }>
-                            <span class="ribbon-icon">"□"</span>
+                            <UiIcon name=IconName::Square size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Window"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "freeform" on:click={
                             let set_active_tool = set_active_tool;
                             move |_| set_active_tool.set("freeform".to_string())
                         }>
-                            <span class="ribbon-icon">"✋"</span>
+                            <UiIcon name=IconName::Hand size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Freeform"</span>
                         </button>
                     </div>
@@ -854,7 +886,7 @@ fn App() -> impl IntoView {
             <div class="cad-main">
                 <aside class="browser">
                     <div class="browser-search-wrap">
-                        <span class="browser-search-icon">"⌕"</span>
+                        <UiIcon name=IconName::Search size=16 class="browser-search-icon" />
                         <input
                             class="browser-input"
                             type="text"
@@ -863,28 +895,38 @@ fn App() -> impl IntoView {
                             on:input=move |ev| set_browser_search.set(event_target_value(&ev))
                         />
                         <div class="browser-search-actions">
-                            <button class="small-icon-btn">"⛃"</button>
-                            <button class="small-icon-btn">"◉"</button>
+                            <button class="small-icon-btn">
+                                <UiIcon name=IconName::Filter size=14 class="small-icon" />
+                            </button>
+                            <button class="small-icon-btn">
+                                <UiIcon name=IconName::Eye size=14 class="small-icon" />
+                            </button>
                         </div>
                     </div>
                     <div class="browser-tree">
                         <button class="tree-row" class:selected=move || browser_selected.get() == "doc-settings" on:click=move |_| set_browser_selected.set("doc-settings".to_string())>
                             <span class="tree-toggle blank">""</span>
-                            <span class="tree-icon">"🗎"</span>
+                            <UiIcon name=IconName::FileText size=16 class="tree-icon" />
                             <span class="tree-text">"Document Settings"</span>
                         </button>
                         <button class="tree-row" class:selected=move || browser_selected.get() == "named-views" on:click=move |_| set_browser_selected.set("named-views".to_string())>
                             <span class="tree-toggle blank">""</span>
-                            <span class="tree-icon">"🔖"</span>
+                            <UiIcon name=IconName::Bookmark size=16 class="tree-icon" />
                             <span class="tree-text">"Named Views"</span>
                         </button>
 
                         <div class="tree-row tree-group" class:selected=move || browser_selected.get() == "origin">
                             <button class="tree-toggle" on:click=move |_| set_expand_origin.update(|v| *v = !*v)>
-                                {move || if expand_origin.get() { "▾" } else { "▸" }}
+                                {move || {
+                                    if expand_origin.get() {
+                                        view! { <UiIcon name=IconName::ChevronDown size=14 class="tree-toggle-icon" /> }
+                                    } else {
+                                        view! { <UiIcon name=IconName::ChevronRight size=14 class="tree-toggle-icon" /> }
+                                    }
+                                }}
                             </button>
                             <button class="tree-main-btn" on:click=move |_| set_browser_selected.set("origin".to_string())>
-                                <span class="tree-icon">"◎"</span>
+                                <UiIcon name=IconName::Compass size=16 class="tree-icon" />
                                 <span class="tree-text">"Origin"</span>
                             </button>
                         </div>
@@ -907,10 +949,16 @@ fn App() -> impl IntoView {
 
                         <div class="tree-row tree-group" class:selected=move || browser_selected.get() == "sketches">
                             <button class="tree-toggle" on:click=move |_| set_expand_sketches.update(|v| *v = !*v)>
-                                {move || if expand_sketches.get() { "▾" } else { "▸" }}
+                                {move || {
+                                    if expand_sketches.get() {
+                                        view! { <UiIcon name=IconName::ChevronDown size=14 class="tree-toggle-icon" /> }
+                                    } else {
+                                        view! { <UiIcon name=IconName::ChevronRight size=14 class="tree-toggle-icon" /> }
+                                    }
+                                }}
                             </button>
                             <button class="tree-main-btn" on:click=move |_| set_browser_selected.set("sketches".to_string())>
-                                <span class="tree-icon">"✎"</span>
+                                <UiIcon name=IconName::PenTool size=16 class="tree-icon" />
                                 <span class="tree-text">"Sketches"</span>
                             </button>
                         </div>
@@ -923,10 +971,16 @@ fn App() -> impl IntoView {
 
                         <div class="tree-row tree-group" class:selected=move || browser_selected.get() == "bodies">
                             <button class="tree-toggle" on:click=move |_| set_expand_bodies.update(|v| *v = !*v)>
-                                {move || if expand_bodies.get() { "▾" } else { "▸" }}
+                                {move || {
+                                    if expand_bodies.get() {
+                                        view! { <UiIcon name=IconName::ChevronDown size=14 class="tree-toggle-icon" /> }
+                                    } else {
+                                        view! { <UiIcon name=IconName::ChevronRight size=14 class="tree-toggle-icon" /> }
+                                    }
+                                }}
                             </button>
                             <button class="tree-main-btn" on:click=move |_| set_browser_selected.set("bodies".to_string())>
-                                <span class="tree-icon">"◻"</span>
+                                <UiIcon name=IconName::Box size=16 class="tree-icon" />
                                 <span class="tree-text">
                                     {move || format!("Bodies ({})", object_count.get())}
                                 </span>
@@ -954,7 +1008,7 @@ fn App() -> impl IntoView {
                                                         }
                                                     }
                                                 >
-                                                    <span class="tree-icon">"◻"</span>
+                                                    <UiIcon name=IconName::Box size=16 class="tree-icon" />
                                                     <span class="tree-text">{format!("Body {}", idx + 1)}</span>
                                                 </button>
                                             }
@@ -966,10 +1020,16 @@ fn App() -> impl IntoView {
 
                         <div class="tree-row tree-group" class:selected=move || browser_selected.get() == "components">
                             <button class="tree-toggle" on:click=move |_| set_expand_components.update(|v| *v = !*v)>
-                                {move || if expand_components.get() { "▾" } else { "▸" }}
+                                {move || {
+                                    if expand_components.get() {
+                                        view! { <UiIcon name=IconName::ChevronDown size=14 class="tree-toggle-icon" /> }
+                                    } else {
+                                        view! { <UiIcon name=IconName::ChevronRight size=14 class="tree-toggle-icon" /> }
+                                    }
+                                }}
                             </button>
                             <button class="tree-main-btn" on:click=move |_| set_browser_selected.set("components".to_string())>
-                                <span class="tree-icon">"🗀"</span>
+                                <UiIcon name=IconName::Folder size=16 class="tree-icon" />
                                 <span class="tree-text">"Components"</span>
                             </button>
                         </div>
@@ -977,9 +1037,15 @@ fn App() -> impl IntoView {
                             <div class="tree-children">
                                 <div class="tree-row tree-group">
                                     <button class="tree-toggle" on:click=move |_| set_expand_component_1.update(|v| *v = !*v)>
-                                        {move || if expand_component_1.get() { "▾" } else { "▸" }}
+                                        {move || {
+                                            if expand_component_1.get() {
+                                                view! { <UiIcon name=IconName::ChevronDown size=14 class="tree-toggle-icon" /> }
+                                            } else {
+                                                view! { <UiIcon name=IconName::ChevronRight size=14 class="tree-toggle-icon" /> }
+                                            }
+                                        }}
                                     </button>
-                                    <span class="tree-icon">"🗀"</span>
+                                    <UiIcon name=IconName::Folder size=16 class="tree-icon" />
                                     <span class="tree-text">"Component 1"</span>
                                 </div>
                                 <Show when=move || expand_component_1.get()>
@@ -1006,15 +1072,25 @@ fn App() -> impl IntoView {
                         <button class="nav-tool" class:active=move || active_tool.get() == "select" on:click={
                             let activate_select_tool = activate_select_tool.clone();
                             move |_| (activate_select_tool.as_ref())()
-                        }>"⌖"</button>
+                        }>
+                            <UiIcon name=IconName::MousePointer2 size=20 class="nav-icon" />
+                        </button>
                         <button class="nav-tool" class:active=move || active_tool.get() == "freeform" on:click={
                             let set_active_tool = set_active_tool;
                             move |_| set_active_tool.set("freeform".to_string())
-                        }>"✋"</button>
+                        }>
+                            <UiIcon name=IconName::Hand size=20 class="nav-icon" />
+                        </button>
                         <div class="nav-divider"></div>
-                        <button class="nav-tool" title="Zoom In">"＋"</button>
-                        <button class="nav-tool" title="Zoom Out">"−"</button>
-                        <button class="nav-tool" title="Fit View">"⬚"</button>
+                        <button class="nav-tool" title="Zoom In">
+                            <UiIcon name=IconName::ZoomIn size=20 class="nav-icon" />
+                        </button>
+                        <button class="nav-tool" title="Zoom Out">
+                            <UiIcon name=IconName::ZoomOut size=20 class="nav-icon" />
+                        </button>
+                        <button class="nav-tool" title="Fit View">
+                            <UiIcon name=IconName::Maximize2 size=20 class="nav-icon" />
+                        </button>
                     </div>
 
                     <aside
@@ -1107,14 +1183,22 @@ fn App() -> impl IntoView {
 
             <footer class="timeline">
                 <div class="timeline-controls">
-                    <button class="timeline-control">"⏮"</button>
-                    <button class="timeline-control">"▶"</button>
-                    <button class="timeline-control">"⏭"</button>
+                    <button class="timeline-control" title="Step Back">
+                        <UiIcon name=IconName::SkipBack size=16 class="timeline-control-icon" />
+                    </button>
+                    <button class="timeline-control" title="Play">
+                        <UiIcon name=IconName::Play size=16 class="timeline-control-icon" />
+                    </button>
+                    <button class="timeline-control" title="Step Forward">
+                        <UiIcon name=IconName::SkipForward size=16 class="timeline-control-icon" />
+                    </button>
                     <div class="timeline-divider"></div>
                     <span class="timeline-title">"Feature History"</span>
                 </div>
                 <div class="timeline-track">
-                    <button class="timeline-scroll-btn">"◀"</button>
+                    <button class="timeline-scroll-btn">
+                        <UiIcon name=IconName::ChevronLeft size=16 class="timeline-scroll-icon" />
+                    </button>
                     <div class="timeline-items">
                         {TIMELINE_FEATURES
                             .into_iter()
@@ -1132,7 +1216,9 @@ fn App() -> impl IntoView {
                             })
                             .collect_view()}
                     </div>
-                    <button class="timeline-scroll-btn">"▶"</button>
+                    <button class="timeline-scroll-btn">
+                        <UiIcon name=IconName::ChevronRight size=16 class="timeline-scroll-icon" />
+                    </button>
                 </div>
             </footer>
 
@@ -1141,7 +1227,7 @@ fn App() -> impl IntoView {
                     <div class="command-dialog" on:click=move |ev| ev.stop_propagation()>
                         <div class="command-head">
                             <div class="command-input-wrap">
-                                <span class="command-search-icon">"⌕"</span>
+                                <UiIcon name=IconName::Search size=20 class="command-search-icon" />
                                 <input
                                     class="command-input"
                                     type="text"
@@ -1149,7 +1235,9 @@ fn App() -> impl IntoView {
                                     prop:value=move || palette_query.get()
                                     on:input=move |ev| set_palette_query.set(event_target_value(&ev))
                                 />
-                                <button class="command-close" on:click=move |_| set_show_palette.set(false)>"✕"</button>
+                                <button class="command-close" on:click=move |_| set_show_palette.set(false)>
+                                    <UiIcon name=IconName::X size=16 class="command-close-icon" />
+                                </button>
                             </div>
                         </div>
                         <div class="command-list">
@@ -1182,11 +1270,33 @@ fn App() -> impl IntoView {
                                                             }
                                                         >
                                                             <div class="command-row-main">
-                                                                <span class="command-row-icon">"⌘"</span>
-                                                                <span class="command-row-label">{cmd.label}</span>
-                                                                <span class="command-row-category">{cmd.category}</span>
+                                                                <UiIcon
+                                                                    name=command_icon(cmd.id)
+                                                                    size=16
+                                                                    class="command-row-icon"
+                                                                />
+                                                                <div class="command-row-text">
+                                                                    <span class="command-row-label">{cmd.label}</span>
+                                                                    <span class="command-row-category">{cmd.category}</span>
+                                                                </div>
                                                             </div>
-                                                            <span class="command-row-shortcut">{cmd.shortcut.unwrap_or("")}</span>
+                                                            <span class="command-row-shortcut">
+                                                                {if let Some(shortcut) = cmd.shortcut {
+                                                                    view! {
+                                                                        <>
+                                                                            {shortcut
+                                                                                .split('+')
+                                                                                .map(|key| {
+                                                                                    view! { <kbd>{key}</kbd> }
+                                                                                })
+                                                                                .collect_view()}
+                                                                        </>
+                                                                    }
+                                                                        .into_any()
+                                                                } else {
+                                                                    view! { <></> }.into_any()
+                                                                }}
+                                                            </span>
                                                         </button>
                                                     }
                                                 })
@@ -1199,7 +1309,14 @@ fn App() -> impl IntoView {
                         </div>
                         <div class="command-foot">
                             <span>"Type to search"</span>
-                            <span>"↑↓ Navigate • ↵ Execute • Esc Close"</span>
+                            <span class="command-foot-actions">
+                                <kbd>"↑↓"</kbd>
+                                <span>"Navigate"</span>
+                                <kbd>"↵"</kbd>
+                                <span>"Execute"</span>
+                                <kbd>"Esc"</kbd>
+                                <span>"Close"</span>
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -1212,15 +1329,23 @@ fn App() -> impl IntoView {
                         <div class="console-panel">
                             <div class="console-head">
                                 <div class="console-head-left">
-                                    <span class="console-icon">"⌨"</span>
+                                    <UiIcon name=IconName::Terminal size=16 class="console-icon" />
                                     <span class="console-title">"Console"</span>
                                     <span class="console-badge">{move || log_entries.get().len().to_string()}</span>
                                 </div>
                                 <div class="console-head-right">
                                     <button class="console-head-btn" on:click=move |_| set_console_expanded.update(|open| *open = !*open)>
-                                        {move || if console_expanded.get() { "▾" } else { "▴" }}
+                                        {move || {
+                                            if console_expanded.get() {
+                                                view! { <UiIcon name=IconName::ChevronDown size=16 class="console-head-icon" /> }
+                                            } else {
+                                                view! { <UiIcon name=IconName::ChevronUp size=16 class="console-head-icon" /> }
+                                            }
+                                        }}
                                     </button>
-                                    <button class="console-head-btn" on:click=move |_| set_show_console.set(false)>"✕"</button>
+                                    <button class="console-head-btn" on:click=move |_| set_show_console.set(false)>
+                                        <UiIcon name=IconName::X size=16 class="console-head-icon" />
+                                    </button>
                                 </div>
                             </div>
                             <Show when=move || console_expanded.get()>
@@ -1236,13 +1361,15 @@ fn App() -> impl IntoView {
                                                     UiLogLevel::Info => "info",
                                                 };
                                                 let level_icon = match entry.level {
-                                                    UiLogLevel::Success => "✓",
-                                                    UiLogLevel::Warning => "⚠",
-                                                    UiLogLevel::Info => "ℹ",
+                                                    UiLogLevel::Success => IconName::Check,
+                                                    UiLogLevel::Warning => IconName::AlertTriangle,
+                                                    UiLogLevel::Info => IconName::Info,
                                                 };
                                                 view! {
                                                     <div class="console-row">
-                                                        <span class={format!("console-level {}", level_class)}>{level_icon}</span>
+                                                        <span class={format!("console-level {}", level_class)}>
+                                                            <UiIcon name=level_icon size=16 class="console-level-icon" />
+                                                        </span>
                                                         <div class="console-row-main">
                                                             <div class="console-msg">{entry.message}</div>
                                                             <div class="console-time">{entry.timestamp}</div>
@@ -1266,7 +1393,7 @@ fn App() -> impl IntoView {
                 }
             >
                 <button class="console-fab" on:click=move |_| set_show_console.set(true)>
-                    <span class="console-icon">"⌨"</span>
+                    <UiIcon name=IconName::Terminal size=16 class="console-icon" />
                     <span>"Console"</span>
                     <span class="console-badge">{move || log_entries.get().len().to_string()}</span>
                 </button>
@@ -1279,10 +1406,12 @@ fn App() -> impl IntoView {
                         <div class="shortcuts-panel">
                             <div class="shortcuts-head">
                                 <div class="shortcuts-title-wrap">
-                                    <span class="shortcuts-icon">"⌨"</span>
+                                    <UiIcon name=IconName::Keyboard size=16 class="shortcuts-icon" />
                                     <span class="shortcuts-title">"Keyboard Shortcuts"</span>
                                 </div>
-                                <button class="shortcuts-close" on:click=move |_| set_show_shortcuts.set(false)>"✕"</button>
+                                <button class="shortcuts-close" on:click=move |_| set_show_shortcuts.set(false)>
+                                    <UiIcon name=IconName::X size=16 class="shortcuts-close-icon" />
+                                </button>
                             </div>
                             <div class="shortcuts-list">
                                 {["General", "File", "Edit", "Create", "Modify", "View"]
@@ -1322,7 +1451,7 @@ fn App() -> impl IntoView {
                 }
             >
                 <button class="shortcuts-fab" on:click=move |_| set_show_shortcuts.set(true)>
-                    <span class="shortcuts-icon">"⌨"</span>
+                    <UiIcon name=IconName::Keyboard size=16 class="shortcuts-icon" />
                     <span>"Shortcuts"</span>
                 </button>
             </Show>
@@ -1330,22 +1459,36 @@ fn App() -> impl IntoView {
             <Show when=move || show_project_info.get()>
                 <div class="project-info">
                     <div class="project-info-head">
-                        <span class="project-title">"Project Information"</span>
-                        <button class="project-close" on:click=move |_| set_show_project_info.set(false)>"✕"</button>
+                        <div class="project-title-wrap">
+                            <UiIcon name=IconName::FileText size=16 class="project-title-icon" />
+                            <span class="project-title">"Project Information"</span>
+                        </div>
+                        <button class="project-close" on:click=move |_| set_show_project_info.set(false)>
+                            <UiIcon name=IconName::X size=14 class="project-close-icon" />
+                        </button>
                     </div>
                     <div class="project-row">
+                        <UiIcon name=IconName::Package size=14 class="project-row-icon" />
                         <span class="project-row-label">"Project Name"</span>
                         <span class="project-row-value">"Mechanical Assembly v2"</span>
                     </div>
                     <div class="project-row">
+                        <UiIcon name=IconName::User size=14 class="project-row-icon" />
                         <span class="project-row-label">"Created by"</span>
                         <span class="project-row-value">"Design Engineer"</span>
                     </div>
                     <div class="project-row">
+                        <UiIcon name=IconName::Calendar size=14 class="project-row-icon" />
                         <span class="project-row-label">"Last Modified"</span>
                         <span class="project-row-value">"Feb 16, 2026 10:23"</span>
                     </div>
-                    <div class="project-foot">"10 Features • 3 Components • 2 Bodies"</div>
+                    <div class="project-foot">
+                        <span>"10 Features"</span>
+                        <span>"•"</span>
+                        <span>"3 Components"</span>
+                        <span>"•"</span>
+                        <span>"2 Bodies"</span>
+                    </div>
                 </div>
             </Show>
         </div>
