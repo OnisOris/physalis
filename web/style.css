@@ -404,6 +404,13 @@ kbd {
   margin-left: 8px;
 }
 
+.tree-empty {
+  margin-left: 8px;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .viewport-frame {
   flex: 1;
   min-width: 0;
@@ -510,6 +517,91 @@ kbd {
   width: 100%;
   height: 1px;
   background: var(--line);
+}
+
+.sketch-prompt-card,
+.sketch-mode-card {
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 340px;
+  max-width: min(540px, calc(100% - 40px));
+  background: rgba(255, 255, 255, 0.96);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(20, 26, 32, 0.18);
+  backdrop-filter: blur(4px);
+  z-index: 11;
+  padding: 12px;
+}
+
+.sketch-prompt-title,
+.sketch-mode-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.sketch-prompt-text,
+.sketch-mode-text {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.sketch-prompt-actions,
+.sketch-mode-actions {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.sketch-plane-btn,
+.sketch-finish-btn,
+.sketch-cancel-btn {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.sketch-plane-btn:hover,
+.sketch-finish-btn:hover,
+.sketch-cancel-btn:hover {
+  border-color: var(--accent);
+  background: #ffffff;
+}
+
+.sketch-finish-btn {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sketch-prompt-foot {
+  margin-top: 8px;
+}
+
+.sketch-mode-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sketch-mode-count {
+  font-size: 11px;
+  color: var(--muted);
 }
 
 .inspector-card {

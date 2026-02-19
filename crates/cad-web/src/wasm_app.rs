@@ -1,6 +1,6 @@
 use crate::ui_icons::{IconName, UiIcon};
 use cad_core::{ObjectId, Transform};
-use cad_geom::GeomScene;
+use cad_geom::{GeomScene, SurfaceHit};
 use cad_protocol::{ClientMsg, ServerMsg};
 use cad_render::{OverlayLine, Renderer};
 use glam::{EulerRot, Mat3, Quat, Vec3};
@@ -236,6 +236,13 @@ fn App() -> impl IntoView {
     let (selected_id, set_selected_id) = signal(None::<ObjectId>);
     let (baseline_transform, set_baseline_transform) = signal(None::<Transform>);
     let (transform_ui, set_transform_ui) = signal(TransformUi::default());
+    let (sketch_plane, set_sketch_plane) = signal(None::<SketchPlane>);
+    let (sketch_plane_name, set_sketch_plane_name) = signal(String::new());
+    let (sketch_segments, set_sketch_segments) = signal(Vec::<SketchSegment>::new());
+    let (sketch_anchor, set_sketch_anchor) = signal(None::<Vec3>);
+    let (sketch_cursor, set_sketch_cursor) = signal(None::<Vec3>);
+    let (saved_sketches, set_saved_sketches) = signal(Vec::<SavedSketch>::new());
+    let (next_sketch_id, set_next_sketch_id) = signal(1usize);
     let (active_tab, set_active_tab) = signal("Model".to_string());
     let (active_tool, set_active_tool) = signal("select".to_string());
     let (active_feature, set_active_feature) = signal("f3".to_string());
@@ -291,6 +298,29 @@ fn App() -> impl IntoView {
         })
     };
 
+    let enter_sketch_draw: Rc<dyn Fn(SketchPlane, String)> = {
+        let renderer = renderer.clone();
+        let set_tool_mode = set_tool_mode;
+        let set_active_tool = set_active_tool;
+        let set_sketch_plane = set_sketch_plane;
+        let set_sketch_plane_name = set_sketch_plane_name;
+        let set_sketch_segments = set_sketch_segments;
+        let set_sketch_anchor = set_sketch_anchor;
+        let set_sketch_cursor = set_sketch_cursor;
+        let push_log = push_log.clone();
+        Rc::new(move |plane, label| {
+            set_sketch_plane.set(Some(plane));
+            set_sketch_plane_name.set(label.clone());
+            set_sketch_segments.set(Vec::new());
+            set_sketch_anchor.set(None);
+            set_sketch_cursor.set(None);
+            set_tool_mode.set(EditorTool::SketchDraw);
+            set_active_tool.set("sketch".to_string());
+            animate_camera_to_sketch_plane(renderer.clone(), plane);
+            (push_log.as_ref())(UiLogLevel::Info, format!("Sketch started on {label}"));
+        })
+    };
+
     {
         let palette_key_listener = palette_key_listener.clone();
         let set_show_palette = set_show_palette;
@@ -342,6 +372,7 @@ fn App() -> impl IntoView {
         let scene = scene.clone();
         let renderer = renderer.clone();
         let editor_attached = editor_attached.clone();
+        let enter_sketch_draw_for_controls = enter_sketch_draw.clone();
         Effect::new(move |_| {
             if *editor_attached.borrow() {
                 return;
@@ -368,6 +399,13 @@ fn App() -> impl IntoView {
                 set_baseline_transform,
                 set_transform_ui,
                 drag_state.clone(),
+                sketch_plane,
+                sketch_segments,
+                set_sketch_segments,
+                sketch_anchor,
+                set_sketch_anchor,
+                set_sketch_cursor,
+                enter_sketch_draw_for_controls.clone(),
             );
             *editor_attached.borrow_mut() = true;
         });
@@ -438,18 +476,119 @@ fn App() -> impl IntoView {
     let activate_move_tool: Rc<dyn Fn()> = {
         let set_active_tool = set_active_tool;
         let set_tool_mode = set_tool_mode;
+        let set_sketch_anchor = set_sketch_anchor;
+        let set_sketch_cursor = set_sketch_cursor;
         Rc::new(move || {
             set_active_tool.set("move".to_string());
             set_tool_mode.set(EditorTool::Move);
+            set_sketch_anchor.set(None);
+            set_sketch_cursor.set(None);
         })
     };
 
     let activate_select_tool: Rc<dyn Fn()> = {
         let set_active_tool = set_active_tool;
         let set_tool_mode = set_tool_mode;
+        let set_sketch_anchor = set_sketch_anchor;
+        let set_sketch_cursor = set_sketch_cursor;
         Rc::new(move || {
             set_active_tool.set("select".to_string());
             set_tool_mode.set(EditorTool::None);
+            set_sketch_anchor.set(None);
+            set_sketch_cursor.set(None);
+        })
+    };
+
+    let start_sketch_select: Rc<dyn Fn()> = {
+        let set_active_tool = set_active_tool;
+        let set_tool_mode = set_tool_mode;
+        let set_sketch_plane = set_sketch_plane;
+        let set_sketch_plane_name = set_sketch_plane_name;
+        let set_sketch_segments = set_sketch_segments;
+        let set_sketch_anchor = set_sketch_anchor;
+        let set_sketch_cursor = set_sketch_cursor;
+        let push_log = push_log.clone();
+        Rc::new(move || {
+            set_active_tool.set("sketch".to_string());
+            set_tool_mode.set(EditorTool::SketchSelect);
+            set_sketch_plane.set(None);
+            set_sketch_plane_name.set(String::new());
+            set_sketch_segments.set(Vec::new());
+            set_sketch_anchor.set(None);
+            set_sketch_cursor.set(None);
+            (push_log.as_ref())(
+                UiLogLevel::Info,
+                "Sketch: select a planar face or a base plane".to_string(),
+            );
+        })
+    };
+
+    let finish_sketch: Rc<dyn Fn()> = {
+        let set_active_tool = set_active_tool;
+        let set_tool_mode = set_tool_mode;
+        let sketch_plane = sketch_plane;
+        let sketch_plane_name = sketch_plane_name;
+        let set_sketch_plane = set_sketch_plane;
+        let set_sketch_plane_name = set_sketch_plane_name;
+        let set_sketch_segments = set_sketch_segments;
+        let set_sketch_anchor = set_sketch_anchor;
+        let set_sketch_cursor = set_sketch_cursor;
+        let sketch_segments = sketch_segments;
+        let set_saved_sketches = set_saved_sketches;
+        let next_sketch_id = next_sketch_id;
+        let set_next_sketch_id = set_next_sketch_id;
+        let set_browser_selected = set_browser_selected;
+        let push_log = push_log.clone();
+        Rc::new(move || {
+            if sketch_plane.get_untracked().is_some() {
+                let sketch_id = next_sketch_id.get_untracked();
+                let name = format!("Sketch {sketch_id}");
+                let plane_label = sketch_plane_name.get_untracked();
+                let segments = sketch_segments.get_untracked();
+                set_saved_sketches.update(|items| {
+                    items.push(SavedSketch {
+                        id: sketch_id,
+                        name: name.clone(),
+                        plane_label: plane_label.clone(),
+                        segments: segments.clone(),
+                    });
+                });
+                set_next_sketch_id.set(sketch_id + 1);
+                set_browser_selected.set(format!("sketch-{sketch_id}"));
+                (push_log.as_ref())(
+                    UiLogLevel::Success,
+                    format!("{} saved with {} segments", name, segments.len()),
+                );
+            }
+
+            set_tool_mode.set(EditorTool::None);
+            set_active_tool.set("select".to_string());
+            set_sketch_plane.set(None);
+            set_sketch_plane_name.set(String::new());
+            set_sketch_segments.set(Vec::new());
+            set_sketch_anchor.set(None);
+            set_sketch_cursor.set(None);
+        })
+    };
+
+    let cancel_sketch: Rc<dyn Fn()> = {
+        let set_active_tool = set_active_tool;
+        let set_tool_mode = set_tool_mode;
+        let set_sketch_plane = set_sketch_plane;
+        let set_sketch_plane_name = set_sketch_plane_name;
+        let set_sketch_segments = set_sketch_segments;
+        let set_sketch_anchor = set_sketch_anchor;
+        let set_sketch_cursor = set_sketch_cursor;
+        let push_log = push_log.clone();
+        Rc::new(move || {
+            set_tool_mode.set(EditorTool::None);
+            set_active_tool.set("select".to_string());
+            set_sketch_plane.set(None);
+            set_sketch_plane_name.set(String::new());
+            set_sketch_segments.set(Vec::new());
+            set_sketch_anchor.set(None);
+            set_sketch_cursor.set(None);
+            (push_log.as_ref())(UiLogLevel::Warning, "Sketch canceled".to_string());
         })
     };
 
@@ -576,13 +715,36 @@ fn App() -> impl IntoView {
     {
         let scene = scene.clone();
         let renderer = renderer.clone();
+        let sketch_plane = sketch_plane;
+        let sketch_segments = sketch_segments;
+        let sketch_anchor = sketch_anchor;
+        let sketch_cursor = sketch_cursor;
         Effect::new(move |_| {
             if !renderer_ready.get() {
                 return;
             }
-            let selected = selected_id.get();
-            let show_gizmo = tool_mode.get() == EditorTool::Move;
-            update_overlay(&scene, &renderer, selected, show_gizmo);
+            let mode = tool_mode.get();
+            match mode {
+                EditorTool::Move => {
+                    update_overlay(&scene, &renderer, selected_id.get(), true);
+                }
+                EditorTool::SketchDraw => {
+                    let segments = sketch_segments.get();
+                    update_sketch_overlay(
+                        &renderer,
+                        sketch_plane.get(),
+                        &segments,
+                        sketch_anchor.get(),
+                        sketch_cursor.get(),
+                    );
+                }
+                EditorTool::SketchSelect => {
+                    update_sketch_overlay(&renderer, None, &[], None, None);
+                }
+                EditorTool::None => {
+                    update_overlay(&scene, &renderer, selected_id.get(), false);
+                }
+            }
         });
     }
 
@@ -663,12 +825,8 @@ fn App() -> impl IntoView {
                             <span class="ribbon-label">"Torus"</span>
                         </button>
                         <button class="ribbon-tool" class:active=move || active_tool.get() == "sketch" on:click={
-                            let set_active_tool = set_active_tool;
-                            let push_log = push_log.clone();
-                            move |_| {
-                                set_active_tool.set("sketch".to_string());
-                                (push_log.as_ref())(UiLogLevel::Info, "Sketch mode is not connected yet".to_string());
-                            }
+                            let start_sketch_select = start_sketch_select.clone();
+                            move |_| (start_sketch_select.as_ref())()
                         }>
                             <UiIcon name=IconName::Square size=20 class="ribbon-icon" />
                             <span class="ribbon-label">"Sketch"</span>
@@ -964,8 +1122,41 @@ fn App() -> impl IntoView {
                         </div>
                         <Show when=move || expand_sketches.get()>
                             <div class="tree-children">
-                                <button class="tree-row tree-leaf">"Sketch 1"</button>
-                                <button class="tree-row tree-leaf">"Sketch 2"</button>
+                                {move || {
+                                    let items = saved_sketches.get();
+                                    if items.is_empty() {
+                                        return view! {
+                                            <div class="tree-empty">"No sketches yet"</div>
+                                        }
+                                            .into_any();
+                                    }
+                                    items
+                                        .into_iter()
+                                        .map(|item| {
+                                            let row_id = format!("sketch-{}", item.id);
+                                            let row_id_for_class = row_id.clone();
+                                            let label = format!(
+                                                "{} · {} seg · {}",
+                                                item.name,
+                                                item.segments.len(),
+                                                item.plane_label
+                                            );
+                                            view! {
+                                                <button
+                                                    class="tree-row tree-leaf"
+                                                    class:selected=move || browser_selected.get() == row_id_for_class
+                                                    on:click={
+                                                        let row_id = row_id.clone();
+                                                        move |_| set_browser_selected.set(row_id.clone())
+                                                    }
+                                                >
+                                                    {label}
+                                                </button>
+                                            }
+                                        })
+                                        .collect_view()
+                                        .into_any()
+                                }}
                             </div>
                         </Show>
 
@@ -1093,6 +1284,96 @@ fn App() -> impl IntoView {
                         </button>
                     </div>
 
+                    <div
+                        class="sketch-prompt-card"
+                        style:display=move || {
+                            if tool_mode.get() == EditorTool::SketchSelect {
+                                "block"
+                            } else {
+                                "none"
+                            }
+                        }
+                    >
+                        <div class="sketch-prompt-title">"Create Sketch"</div>
+                        <div class="sketch-prompt-text">
+                            "Select any planar face on a body or choose a base plane."
+                        </div>
+                        <div class="sketch-prompt-actions">
+                            <button class="sketch-plane-btn" on:click={
+                                let enter_sketch_draw = enter_sketch_draw.clone();
+                                move |_| {
+                                    let (plane, label) = base_sketch_plane(BaseSketchPlane::XY);
+                                    (enter_sketch_draw.as_ref())(plane, label.to_string());
+                                }
+                            }>
+                                "XY Plane"
+                            </button>
+                            <button class="sketch-plane-btn" on:click={
+                                let enter_sketch_draw = enter_sketch_draw.clone();
+                                move |_| {
+                                    let (plane, label) = base_sketch_plane(BaseSketchPlane::XZ);
+                                    (enter_sketch_draw.as_ref())(plane, label.to_string());
+                                }
+                            }>
+                                "XZ Plane"
+                            </button>
+                            <button class="sketch-plane-btn" on:click={
+                                let enter_sketch_draw = enter_sketch_draw.clone();
+                                move |_| {
+                                    let (plane, label) = base_sketch_plane(BaseSketchPlane::YZ);
+                                    (enter_sketch_draw.as_ref())(plane, label.to_string());
+                                }
+                            }>
+                                "YZ Plane"
+                            </button>
+                        </div>
+                        <div class="sketch-prompt-foot">
+                            <button class="sketch-cancel-btn" on:click={
+                                let cancel_sketch = cancel_sketch.clone();
+                                move |_| (cancel_sketch.as_ref())()
+                            }>
+                                "Cancel"
+                            </button>
+                        </div>
+                    </div>
+
+                    <div
+                        class="sketch-mode-card"
+                        style:display=move || {
+                            if tool_mode.get() == EditorTool::SketchDraw {
+                                "block"
+                            } else {
+                                "none"
+                            }
+                        }
+                    >
+                        <div class="sketch-mode-head">
+                            <span class="sketch-mode-title">
+                                {move || format!("Sketch: {}", sketch_plane_name.get())}
+                            </span>
+                            <span class="sketch-mode-count">
+                                {move || format!("{} segments", sketch_segments.get().len())}
+                            </span>
+                        </div>
+                        <div class="sketch-mode-text">
+                            "Click to place points. Each next click adds a line segment on the sketch plane."
+                        </div>
+                        <div class="sketch-mode-actions">
+                            <button class="sketch-finish-btn" on:click={
+                                let finish_sketch = finish_sketch.clone();
+                                move |_| (finish_sketch.as_ref())()
+                            }>
+                                "Finish Sketch"
+                            </button>
+                            <button class="sketch-cancel-btn" on:click={
+                                let cancel_sketch = cancel_sketch.clone();
+                                move |_| (cancel_sketch.as_ref())()
+                            }>
+                                "Cancel"
+                            </button>
+                        </div>
+                    </div>
+
                     <aside
                         class="inspector-card"
                         class:open=move || selected_id.get().is_some() && tool_mode.get() == EditorTool::Move
@@ -1167,10 +1448,11 @@ fn App() -> impl IntoView {
                             <span>{move || format!("Objects: {}", object_count.get())}</span>
                             <span>"•"</span>
                             <span>{move || {
-                                if tool_mode.get() == EditorTool::Move {
-                                    "Tool: Move".to_string()
-                                } else {
-                                    "Tool: View".to_string()
+                                match tool_mode.get() {
+                                    EditorTool::Move => "Tool: Move".to_string(),
+                                    EditorTool::SketchSelect => "Tool: Sketch Select".to_string(),
+                                    EditorTool::SketchDraw => "Tool: Sketch Draw".to_string(),
+                                    EditorTool::None => "Tool: View".to_string(),
                                 }
                             }}</span>
                             <span>"•"</span>
@@ -1499,6 +1781,37 @@ fn App() -> impl IntoView {
 enum EditorTool {
     None,
     Move,
+    SketchSelect,
+    SketchDraw,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BaseSketchPlane {
+    XY,
+    XZ,
+    YZ,
+}
+
+#[derive(Clone, Copy)]
+struct SketchPlane {
+    origin: Vec3,
+    normal: Vec3,
+    u: Vec3,
+    v: Vec3,
+}
+
+#[derive(Clone, Copy)]
+struct SketchSegment {
+    a: Vec3,
+    b: Vec3,
+}
+
+#[derive(Clone)]
+struct SavedSketch {
+    id: usize,
+    name: String,
+    plane_label: String,
+    segments: Vec<SketchSegment>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2130,6 +2443,223 @@ fn snap_camera_rotation(current_rot: Quat, dir_world: Vec3, up_hint: Vec3) -> Qu
     Quat::from_mat3(&Mat3::from_cols(right, up, dir)).normalize()
 }
 
+fn base_sketch_plane(kind: BaseSketchPlane) -> (SketchPlane, &'static str) {
+    match kind {
+        BaseSketchPlane::XY => (
+            SketchPlane {
+                origin: Vec3::ZERO,
+                normal: Vec3::Z,
+                u: Vec3::X,
+                v: Vec3::Y,
+            },
+            "XY Plane",
+        ),
+        BaseSketchPlane::XZ => (
+            SketchPlane {
+                origin: Vec3::ZERO,
+                normal: Vec3::Y,
+                u: Vec3::X,
+                v: Vec3::Z,
+            },
+            "XZ Plane",
+        ),
+        BaseSketchPlane::YZ => (
+            SketchPlane {
+                origin: Vec3::ZERO,
+                normal: Vec3::X,
+                u: Vec3::Y,
+                v: Vec3::Z,
+            },
+            "YZ Plane",
+        ),
+    }
+}
+
+fn sketch_plane_from_surface(hit: SurfaceHit) -> SketchPlane {
+    let origin = Vec3::from_array(hit.point);
+    let mut normal = Vec3::from_array(hit.normal).normalize_or_zero();
+    if normal.length_squared() < 1.0e-6 {
+        normal = Vec3::Z;
+    }
+    let helper = if normal.dot(Vec3::Y).abs() < 0.95 {
+        Vec3::Y
+    } else {
+        Vec3::X
+    };
+    let mut u = helper.cross(normal).normalize_or_zero();
+    if u.length_squared() < 1.0e-6 {
+        u = Vec3::X;
+    }
+    let v = normal.cross(u).normalize_or_zero();
+    SketchPlane {
+        origin,
+        normal,
+        u,
+        v,
+    }
+}
+
+fn ray_plane_intersection(ray_o: Vec3, ray_d: Vec3, plane: SketchPlane) -> Option<Vec3> {
+    let denom = plane.normal.dot(ray_d);
+    if denom.abs() < 1.0e-6 {
+        return None;
+    }
+    let t = plane.normal.dot(plane.origin - ray_o) / denom;
+    if t <= 0.0 {
+        return None;
+    }
+    Some(ray_o + ray_d * t)
+}
+
+fn snap_sketch_point(point: Vec3, plane: SketchPlane, step: f32) -> Vec3 {
+    let rel = point - plane.origin;
+    let u = (rel.dot(plane.u) / step).round() * step;
+    let v = (rel.dot(plane.v) / step).round() * step;
+    plane.origin + plane.u * u + plane.v * v
+}
+
+fn add_sketch_grid(lines: &mut Vec<OverlayLine>, plane: SketchPlane, half_steps: i32, step: f32) {
+    let extent = half_steps as f32 * step;
+    for i in -half_steps..=half_steps {
+        let t = i as f32 * step;
+        let is_axis = i == 0;
+        let color_u = if is_axis {
+            [0.3, 0.75, 1.0]
+        } else {
+            [0.3, 0.36, 0.46]
+        };
+        let color_v = if is_axis {
+            [0.55, 0.85, 0.5]
+        } else {
+            [0.3, 0.36, 0.46]
+        };
+        let a = plane.origin + plane.u * t - plane.v * extent;
+        let b = plane.origin + plane.u * t + plane.v * extent;
+        let c = plane.origin + plane.v * t - plane.u * extent;
+        let d = plane.origin + plane.v * t + plane.u * extent;
+        lines.push(OverlayLine {
+            a: a.to_array(),
+            b: b.to_array(),
+            color: color_u,
+        });
+        lines.push(OverlayLine {
+            a: c.to_array(),
+            b: d.to_array(),
+            color: color_v,
+        });
+    }
+
+    let corners = [
+        plane.origin + plane.u * extent + plane.v * extent,
+        plane.origin - plane.u * extent + plane.v * extent,
+        plane.origin - plane.u * extent - plane.v * extent,
+        plane.origin + plane.u * extent - plane.v * extent,
+    ];
+    for i in 0..4 {
+        lines.push(OverlayLine {
+            a: corners[i].to_array(),
+            b: corners[(i + 1) % 4].to_array(),
+            color: [0.6, 0.68, 0.86],
+        });
+    }
+}
+
+fn update_sketch_overlay(
+    renderer: &Rc<RefCell<Option<Renderer>>>,
+    plane: Option<SketchPlane>,
+    segments: &[SketchSegment],
+    anchor: Option<Vec3>,
+    cursor: Option<Vec3>,
+) {
+    let mut renderer_borrow = renderer.borrow_mut();
+    let Some(renderer) = renderer_borrow.as_mut() else {
+        return;
+    };
+    let Some(plane) = plane else {
+        renderer.clear_overlay_lines();
+        renderer.render();
+        return;
+    };
+
+    let mut lines = Vec::new();
+    add_sketch_grid(&mut lines, plane, 16, 0.1);
+
+    for seg in segments {
+        lines.push(OverlayLine {
+            a: seg.a.to_array(),
+            b: seg.b.to_array(),
+            color: [0.34, 0.58, 1.0],
+        });
+    }
+
+    if let (Some(a), Some(c)) = (anchor, cursor) {
+        lines.push(OverlayLine {
+            a: a.to_array(),
+            b: c.to_array(),
+            color: [1.0, 0.82, 0.28],
+        });
+    }
+
+    renderer.set_overlay_lines(lines);
+    renderer.render();
+}
+
+fn animate_camera_to_sketch_plane(renderer: Rc<RefCell<Option<Renderer>>>, plane: SketchPlane) {
+    let (start_target, start_radius, start_rot) = {
+        let mut renderer_borrow = renderer.borrow_mut();
+        let Some(r) = renderer_borrow.as_mut() else {
+            return;
+        };
+        let (target, radius) = r.camera_target_radius();
+        let rotation = Quat::from_array(r.camera_rotation()).normalize();
+        (Vec3::from_array(target), radius, rotation)
+    };
+
+    let end_target = plane.origin;
+    let end_rot = snap_camera_rotation(start_rot, plane.normal, plane.v);
+    let end_radius = (start_radius * 0.58).clamp(1.0, 30.0);
+    let start_ms = Date::now();
+    let duration_ms = 520.0;
+
+    let raf = Rc::new(RefCell::new(None::<Closure<dyn FnMut(f64)>>));
+    let raf_clone = raf.clone();
+    let renderer_for_cb = renderer.clone();
+
+    *raf.borrow_mut() = Some(Closure::wrap(Box::new(move |time: f64| {
+        let t = ((time - start_ms) / duration_ms).clamp(0.0, 1.0) as f32;
+        let ease = if t < 0.5 {
+            4.0 * t * t * t
+        } else {
+            1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+        };
+
+        let target = start_target.lerp(end_target, ease);
+        let rotation = start_rot.slerp(end_rot, ease).normalize();
+        let radius = start_radius + (end_radius - start_radius) * ease;
+
+        if let Some(r) = renderer_for_cb.borrow_mut().as_mut() {
+            r.set_camera_view(target.to_array(), rotation.to_array(), radius);
+            r.render();
+        }
+
+        if t < 1.0 {
+            if let Some(window) = web_sys::window() {
+                if let Some(cb) = raf_clone.borrow().as_ref() {
+                    let _ = window.request_animation_frame(cb.as_ref().unchecked_ref());
+                }
+            }
+        } else {
+            raf_clone.borrow_mut().take();
+        }
+    }) as Box<dyn FnMut(f64)>));
+
+    if let Some(window) = web_sys::window() {
+        if let Some(cb) = raf.borrow().as_ref() {
+            let _ = window.request_animation_frame(cb.as_ref().unchecked_ref());
+        }
+    }
+}
+
 fn attach_editor_controls(
     canvas_el: web_sys::HtmlCanvasElement,
     viewcube_el: web_sys::HtmlCanvasElement,
@@ -2142,6 +2672,13 @@ fn attach_editor_controls(
     set_baseline_transform: WriteSignal<Option<Transform>>,
     set_transform_ui: WriteSignal<TransformUi>,
     drag_state: Rc<RefCell<Option<DragState>>>,
+    sketch_plane: ReadSignal<Option<SketchPlane>>,
+    sketch_segments: ReadSignal<Vec<SketchSegment>>,
+    set_sketch_segments: WriteSignal<Vec<SketchSegment>>,
+    sketch_anchor: ReadSignal<Option<Vec3>>,
+    set_sketch_anchor: WriteSignal<Option<Vec3>>,
+    set_sketch_cursor: WriteSignal<Option<Vec3>>,
+    enter_sketch_draw: Rc<dyn Fn(SketchPlane, String)>,
 ) {
     let viewcube_state = ViewCubeState::new(viewcube_el.clone());
     viewcube_state.draw_now(&renderer);
@@ -2189,12 +2726,19 @@ fn attach_editor_controls(
         let scene = scene.clone();
         let renderer = renderer.clone();
         let drag_state = drag_state.clone();
+        let sketch_plane = sketch_plane;
+        let sketch_segments = sketch_segments;
+        let set_sketch_segments = set_sketch_segments;
+        let sketch_anchor = sketch_anchor;
+        let set_sketch_anchor = set_sketch_anchor;
+        let set_sketch_cursor = set_sketch_cursor;
+        let enter_sketch_draw = enter_sketch_draw.clone();
         let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
             let event = event.dyn_into::<MouseEvent>().unwrap();
             if event.button() != 0 {
                 return;
             }
-            let (ray_o, ray_d, gizmo_hit) = {
+            let (ray_o, ray_d, mode, gizmo_hit) = {
                 let renderer_borrow = renderer.borrow();
                 let Some(r) = renderer_borrow.as_ref() else {
                     return;
@@ -2204,16 +2748,68 @@ fn attach_editor_controls(
                 let (ray_o, ray_d) = r.screen_ray(cursor_x, cursor_y, w, h);
                 let ray_o = Vec3::from_array(ray_o);
                 let ray_d = Vec3::from_array(ray_d);
+                let mode = tool_mode.get_untracked();
 
-                let gizmo_hit = if tool_mode.get_untracked() == EditorTool::Move {
+                let gizmo_hit = if mode == EditorTool::Move {
                     selected_id
                         .get_untracked()
                         .and_then(|id| hit_gizmo(&scene, r, id, ray_o, ray_d).map(|hit| (id, hit)))
                 } else {
                     None
                 };
-                (ray_o, ray_d, gizmo_hit)
+                (ray_o, ray_d, mode, gizmo_hit)
             };
+
+            if mode == EditorTool::SketchSelect {
+                event.prevent_default();
+                if let Some(hit) = scene
+                    .borrow()
+                    .pick_surface(ray_o.to_array(), ray_d.to_array())
+                {
+                    set_selected_id.set(Some(hit.object_id));
+                    if let Some(t) = scene.borrow().object_transform(hit.object_id) {
+                        set_baseline_transform.set(Some(t));
+                        set_transform_ui.set(TransformUi::from_transform(t));
+                    }
+                    let plane = sketch_plane_from_surface(hit);
+                    (enter_sketch_draw.as_ref())(plane, format!("Body {} Face", hit.object_id + 1));
+                }
+                return;
+            }
+
+            if mode == EditorTool::SketchDraw {
+                event.prevent_default();
+                let Some(plane) = sketch_plane.get_untracked() else {
+                    return;
+                };
+                let Some(hit) = ray_plane_intersection(ray_o, ray_d, plane) else {
+                    return;
+                };
+                let snapped = snap_sketch_point(hit, plane, 0.1);
+                set_sketch_cursor.set(Some(snapped));
+                if let Some(anchor) = sketch_anchor.get_untracked() {
+                    if (snapped - anchor).length() > 1.0e-4 {
+                        set_sketch_segments.update(|segments| {
+                            segments.push(SketchSegment {
+                                a: anchor,
+                                b: snapped,
+                            });
+                        });
+                        set_sketch_anchor.set(Some(snapped));
+                    }
+                } else {
+                    set_sketch_anchor.set(Some(snapped));
+                }
+                let segments = sketch_segments.get_untracked();
+                update_sketch_overlay(
+                    &renderer,
+                    Some(plane),
+                    &segments,
+                    sketch_anchor.get_untracked(),
+                    Some(snapped),
+                );
+                return;
+            }
 
             if let Some((id, (mode, start_axis_t, plane_n, axis_dir_world, u, v, ang0))) = gizmo_hit
             {
@@ -2275,6 +2871,54 @@ fn attach_editor_controls(
                 }
                 (request_overlay_refresh.as_ref())();
                 (request_viewcube_refresh.as_ref())();
+            }) as Box<dyn FnMut(_)>);
+            let _ = window
+                .add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref());
+            closure.forget();
+        }
+
+        {
+            let canvas_el = canvas_el.clone();
+            let renderer = renderer.clone();
+            let drag_state = drag_state.clone();
+            let sketch_plane = sketch_plane;
+            let sketch_segments = sketch_segments;
+            let sketch_anchor = sketch_anchor;
+            let set_sketch_cursor = set_sketch_cursor;
+            let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
+                if drag_state.borrow().is_some() {
+                    return;
+                }
+                if tool_mode.get_untracked() != EditorTool::SketchDraw {
+                    return;
+                }
+                let Some(plane) = sketch_plane.get_untracked() else {
+                    return;
+                };
+
+                let event = event.dyn_into::<MouseEvent>().unwrap();
+                let (ray_o, ray_d) = {
+                    let renderer_borrow = renderer.borrow();
+                    let Some(r) = renderer_borrow.as_ref() else {
+                        return;
+                    };
+                    let (cursor_x, cursor_y, w, h) = canvas_cursor(&canvas_el, &event);
+                    r.screen_ray(cursor_x, cursor_y, w, h)
+                };
+                let ray_o = Vec3::from_array(ray_o);
+                let ray_d = Vec3::from_array(ray_d);
+                if let Some(hit) = ray_plane_intersection(ray_o, ray_d, plane) {
+                    let snapped = snap_sketch_point(hit, plane, 0.1);
+                    set_sketch_cursor.set(Some(snapped));
+                    let segments = sketch_segments.get_untracked();
+                    update_sketch_overlay(
+                        &renderer,
+                        Some(plane),
+                        &segments,
+                        sketch_anchor.get_untracked(),
+                        Some(snapped),
+                    );
+                }
             }) as Box<dyn FnMut(_)>);
             let _ = window
                 .add_event_listener_with_callback("mousemove", closure.as_ref().unchecked_ref());
@@ -2372,6 +3016,8 @@ fn attach_editor_controls(
 
         // Keyboard shortcuts
         {
+            let set_sketch_anchor = set_sketch_anchor;
+            let set_sketch_cursor = set_sketch_cursor;
             let closure = Closure::wrap(Box::new(move |event: web_sys::Event| {
                 let event = event.dyn_into::<KeyboardEvent>().unwrap();
 
@@ -2392,9 +3038,13 @@ fn attach_editor_controls(
                 if key == "m" || key == "M" {
                     event.prevent_default();
                     set_tool_mode.set(EditorTool::Move);
+                    set_sketch_anchor.set(None);
+                    set_sketch_cursor.set(None);
                 } else if key == "Escape" {
                     event.prevent_default();
                     set_tool_mode.set(EditorTool::None);
+                    set_sketch_anchor.set(None);
+                    set_sketch_cursor.set(None);
                 }
             }) as Box<dyn FnMut(_)>);
             let _ = window

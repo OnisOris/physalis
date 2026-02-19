@@ -28,6 +28,14 @@ pub struct Aabb {
     pub max: [f32; 3],
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct SurfaceHit {
+    pub object_id: ObjectId,
+    pub point: [f32; 3],
+    pub normal: [f32; 3],
+    pub distance: f32,
+}
+
 impl TriMesh {
     pub fn append(&mut self, other: TriMesh) {
         let base = self.positions.len() as u32;
@@ -161,6 +169,79 @@ impl GeomScene {
         self.mesh_cache = Some(combined.clone());
         Ok(combined)
     }
+
+    pub fn pick_surface(&self, ray_origin: [f32; 3], ray_dir: [f32; 3]) -> Option<SurfaceHit> {
+        let ray_o = Vec3::from_array(ray_origin);
+        let ray_d = Vec3::from_array(ray_dir).normalize_or_zero();
+        if ray_d.length_squared() < 1.0e-12 {
+            return None;
+        }
+
+        let mut best: Option<SurfaceHit> = None;
+        let mut best_t = f32::INFINITY;
+
+        for (idx, obj) in self.model.objects().iter().enumerate() {
+            let Some(mesh) = self.local_meshes.get(idx) else {
+                continue;
+            };
+            let transform = transform_mat(obj.transform);
+            let rotation = Quat::from_xyzw(
+                obj.transform.rotation[0],
+                obj.transform.rotation[1],
+                obj.transform.rotation[2],
+                obj.transform.rotation[3],
+            )
+            .normalize();
+
+            for tri in mesh.indices.chunks_exact(3) {
+                let i0 = tri[0] as usize;
+                let i1 = tri[1] as usize;
+                let i2 = tri[2] as usize;
+                let (Some(p0), Some(p1), Some(p2)) = (
+                    mesh.positions.get(i0),
+                    mesh.positions.get(i1),
+                    mesh.positions.get(i2),
+                ) else {
+                    continue;
+                };
+
+                let p0 = transform.transform_point3(Vec3::from_array(*p0));
+                let p1 = transform.transform_point3(Vec3::from_array(*p1));
+                let p2 = transform.transform_point3(Vec3::from_array(*p2));
+
+                let Some(t) = ray_triangle_intersect(ray_o, ray_d, p0, p1, p2) else {
+                    continue;
+                };
+                if t >= best_t {
+                    continue;
+                }
+
+                let n = if let (Some(n0), Some(n1), Some(n2)) = (
+                    mesh.normals.get(i0),
+                    mesh.normals.get(i1),
+                    mesh.normals.get(i2),
+                ) {
+                    let n_local =
+                        (Vec3::from_array(*n0) + Vec3::from_array(*n1) + Vec3::from_array(*n2))
+                            / 3.0;
+                    (rotation * n_local).normalize_or_zero()
+                } else {
+                    (p1 - p0).cross(p2 - p0).normalize_or_zero()
+                };
+
+                let hit_point = ray_o + ray_d * t;
+                best_t = t;
+                best = Some(SurfaceHit {
+                    object_id: obj.id,
+                    point: hit_point.to_array(),
+                    normal: n.to_array(),
+                    distance: t,
+                });
+            }
+        }
+
+        best
+    }
 }
 
 pub fn make_box(w: f64, h: f64, d: f64) -> Solid {
@@ -281,5 +362,33 @@ fn mesh_bounds_aabb(mesh: &TriMesh) -> Aabb {
     Aabb {
         min: min.to_array(),
         max: max.to_array(),
+    }
+}
+
+fn ray_triangle_intersect(ray_o: Vec3, ray_d: Vec3, v0: Vec3, v1: Vec3, v2: Vec3) -> Option<f32> {
+    let eps = 1.0e-6;
+    let e1 = v1 - v0;
+    let e2 = v2 - v0;
+    let pvec = ray_d.cross(e2);
+    let det = e1.dot(pvec);
+    if det.abs() < eps {
+        return None;
+    }
+    let inv_det = 1.0 / det;
+    let tvec = ray_o - v0;
+    let u = tvec.dot(pvec) * inv_det;
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let qvec = tvec.cross(e1);
+    let v = ray_d.dot(qvec) * inv_det;
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    let t = e2.dot(qvec) * inv_det;
+    if t > eps {
+        Some(t)
+    } else {
+        None
     }
 }

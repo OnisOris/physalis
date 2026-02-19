@@ -372,6 +372,19 @@ impl Renderer {
         state.update_camera();
     }
 
+    pub fn camera_target_radius(&self) -> ([f32; 3], f32) {
+        let state = self.state.borrow();
+        (state.camera.target.to_array(), state.camera.radius)
+    }
+
+    pub fn set_camera_view(&mut self, target: [f32; 3], rotation: [f32; 4], radius: f32) {
+        let mut state = self.state.borrow_mut();
+        state.camera.target = glam::Vec3::from_array(target);
+        state.camera.rotation = glam::Quat::from_array(rotation).normalize();
+        state.camera.radius = radius.clamp(0.2, 200.0);
+        state.update_camera();
+    }
+
     pub fn screen_ray(
         &self,
         cursor_x: f32,

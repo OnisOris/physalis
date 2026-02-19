@@ -46,6 +46,12 @@ impl Renderer {
 
     pub fn set_camera_rotation(&mut self, _rotation: [f32; 4]) {}
 
+    pub fn camera_target_radius(&self) -> ([f32; 3], f32) {
+        ([0.0, 0.0, 0.0], 4.0)
+    }
+
+    pub fn set_camera_view(&mut self, _target: [f32; 3], _rotation: [f32; 4], _radius: f32) {}
+
     pub fn screen_ray(
         &self,
         _cursor_x: f32,
